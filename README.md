@@ -2,7 +2,17 @@
 
 **Mail, calendar and the list as one field: priced every tick, rehearsed across futures before a promise is made, watched by a mind that is home, and spoken about only when the glass falls.**
 
-> **Status: REV 0 · specification only (2026-09-22). Nothing is built. No number in this repository is ISOBAR's own; every measured figure belongs to the instrument it names (`ledger_lattice.cu`, `flight_computer.cu`, `nib`, `connectome`, Laya's card).** The normative document is `docs/SPEC.md`; the stages and their falsifiers are `docs/ROADMAP.md`; the open items are `docs/BACKLOG.md`; the rules for a session working here are `CLAUDE.md`; the concept document that set the design is `docs/lineage/`. The name is provisional (a barometer on a ship is *the glass*; isobars are the lines of equal pressure on its chart).
+> **Status: M0 · the X-ray — built and green on the gym (2026-09-22).** The tape, the typed objects, the reflex client (stub + Laya), the join, deterministic promotion, the people and money registries, the lifted field instrument (`solver/isobar_field.cu`, 8/8 oracles with lie arms on cl, nvcc and WSL g++), the bridge, the Recovery Scan, the glass, five file-based connectors, a synthetic owner with planted truth, and a CLI. On the gym the X-ray recovers **7/7 plants at precision 1.00** with a perfect reflex, the paid-by-verdict invoice is never chased, the WAITING stock is priced, the tape replays byte-identically, and the competence sweep is monotone. **29/29 tests.** Receipt: `receipts/M0_GATE_2026-09-22.md`. Pending for the owner-facing half of the gate: real pilot owners (F-RECOVERY) and 200 owner-labelled emails with the Laya weights (F-JEV). No real mailbox has been connected yet. The normative document is `docs/SPEC.md`; the stages and their falsifiers are `docs/ROADMAP.md`; the open items are `docs/BACKLOG.md`; the rules for a session working here are `CLAUDE.md`; the lab notebook is `docs/devlog.md`; the concept document that set the design is `docs/lineage/`. The name is provisional (a barometer on a ship is *the glass*; isobars are the lines of equal pressure on its chart).
+
+```
+cmd /c C:\isobar\solver\build.cmd              (from PowerShell) builds the instrument on cl + nvcc and runs both selftests
+python -m pytest tests/                        29 checks: contracts · tape · dates · registries · purity · field · the gym end to end
+python -m isobard.cli gym  --out runs/gym/owner1
+python -m isobard.cli scan --owner runs/gym/owner1 --competence 1.0      the X-ray, the field, the glass (store/glass.html)
+python -m isobard.cli replay --store runs/gym/owner1/store --verify      the folds rebuilt from the tape, byte for byte
+python -m isobard.cli sweep --owner runs/gym/owner1                      O-MONO across stub competence and seeds
+```
+A real owner runs the same `scan` against a directory of exports: `mail.mbox` (or `eml/`), `calendar.ics`, `todo.txt`, `contacts.vcf`, an optional `money.csv` verdict export, `tiers.yaml`, `owner.json`.
 
 ## The one idea
 

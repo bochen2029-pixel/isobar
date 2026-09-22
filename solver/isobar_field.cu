@@ -531,7 +531,10 @@ __global__ void k_contra(Lat L, const int* cell_start, const int* cell_count,
       }
     }
 
-    // pairwise within the cell — this is the O(n_cell^2) that locality makes cheap
+    // pairwise within the cell — this is the O(n_cell^2) that locality makes cheap.
+    // ISOBAR: never inside a stock column — two rows waiting on one counterparty share the WAITING
+    // stock by construction and are not a double booking.
+    if (col_is_stock(L, c)) continue;
     for (int m = k + 1; m < n; ++m) {
       const int j = cell_items[base + m];
 
@@ -1392,7 +1395,7 @@ static int run_tick_file(const char* lat_path, const char* prev_path, const char
   std::vector<float> pv; double dvn = -1.0;
   std::vector<std::pair<float,int>> movers;
   if (prev_path && read_prev_v(prev_path, pv) && (int)pv.size() == H.M) {
-    double s2 = 0; for (int c=0;c<H.M;++c){ const double d = (double)R.v[c]-(double)pv[c]; s2 += d*d; movers.push_back({(float)fabs(d), c}); }
+    double s2 = 0; for (int c=0;c<H.M;++c){ const double d = (double)R.v[c]-(double)pv[c]; s2 += d*d; if (fabs(d) > 1e-9) movers.push_back({(float)fabs(d), c}); }
     dvn = sqrt(s2);
     std::sort(movers.begin(), movers.end(), [](const std::pair<float,int>& a, const std::pair<float,int>& b){ return a.first > b.first; });
     if (movers.size() > 8) movers.resize(8);

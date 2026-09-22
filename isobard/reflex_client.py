@@ -86,7 +86,7 @@ class StubReflex:
     def __init__(self, competence: float = 0.9, seed: int = 7, truth: Optional[dict[str, dict[str, Any]]] = None):
         self.c = float(competence)
         self.seed = int(seed)
-        self.truth = truth or {}        # observation_id -> {question: value}
+        self.truth = truth if truth is not None else {}   # observation_id -> {question: value}; the caller may fill it later (shared reference)
         self.provider_fp = f"stub-c{self.c:.2f}-s{self.seed}"
 
     def _u(self, *keys: Any) -> float:
@@ -105,10 +105,15 @@ class StubReflex:
         return levels[j]
 
     def _default(self, q: Question) -> Any:
+        """The null answer: False, the 'none'/'other'/'reply' option, or the lowest level."""
         if q.type == "noul":
             return False
         if q.type == "choice":
-            return list(q.criteria.keys())[-1]
+            keys = list(q.criteria.keys())
+            for k in ("none", "other", "reply"):
+                if k in keys:
+                    return k
+            return keys[0]
         return q.criteria[0]
 
     def compile(self, evidence: str, questions: list[Question], observation_id: str = "") -> dict[str, CellField]:

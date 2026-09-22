@@ -61,10 +61,13 @@ def promote_mail(cell: Cell, join: Join, parsed: dict, owner_actor: str, sender_
                             currency=amt[1] if amt else None, issued_ns=occurred_ns if outbound else None,
                             status="sent" if outbound else "unknown", status_source="mail_inference", evidence=[observation_id])
 
-    # a discharge closes what the join points at; the plane applies it (state change with the join's p)
-    if is_discharge and join.candidates:
+    # a discharge closes what a KEYED join points at (the arity law: identity is relational, and the
+    # embedding only proposes). An unkeyed discharge rides the note as a candidate and never returns early.
+    if is_discharge and join.candidates and join.method in ("exact", "lexical"):
         note.update(rule="discharge", target=join.candidates[0].id, p=p_dis * join.candidates[0].p)
         return None, money, note
+    if is_discharge and join.candidates:
+        note["discharge_candidate"] = (join.candidates[0].id, p_dis * join.candidates[0].p)
 
     if not is_c or direction == "none":
         note["rule"] = "not_commitment"

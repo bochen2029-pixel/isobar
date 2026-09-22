@@ -26,8 +26,12 @@ CONTRA_NAMES = ["OVERCOMMIT", "DOUBLEBOOK", "DEPENDENCY", "DEADLINE", "DUPLICATE
 STOCKS = ["UNPLACED", "UNADJUDICATED", "WAITING"]
 
 
-def find_instrument() -> Path:
-    for name in ("isobar_field.exe", "isobar_field_cpu.exe", "isobar_field_wsl"):
+CPU_BELOW_PAIRS = 1_000_000   # the roofline decides per owner: under a million (row, cell) pairs the CPU reference is the tier
+
+
+def find_instrument(prefer: str = "gpu") -> Path:
+    order = ("isobar_field.exe", "isobar_field_cpu.exe", "isobar_field_wsl") if prefer == "gpu" else ("isobar_field_cpu.exe", "isobar_field_wsl", "isobar_field.exe")
+    for name in order:
         p = ROOT / "solver" / "build" / name
         if p.exists():
             return p
@@ -77,7 +81,8 @@ class FieldBridge:
         self.tick_id = 0
 
     def build(self, rows: list[Commitment], allocations: list[tuple[int, int]], tier_w: dict[str, float],
-              paid_ids: set[str], actor_index: dict[str, int], texts: dict[str, str]) -> tuple[Path, dict]:
+              paid_ids: set[str], actor_index: dict[str, int], texts: dict[str, str],
+              src_of: Optional[dict[str, int]] = None) -> tuple[Path, dict]:
         hz = self.hz
         N, nseat, nslot, ncls = len(rows), 1, hz.nslot, len(KIND_IDX)
         M = nseat * nslot + 3
@@ -90,7 +95,7 @@ class FieldBridge:
             cls[i] = KIND_IDX.get(c.kind, 8)
             d = max(1, math.ceil(c.effort.nom_min / hz.slot_min))
             dur[i] = min(255, d)
-            src[i] = 0 if c.evidence and "mail" in (c.evidence[0][:4] if False else "mail") else 0
+            src[i] = (src_of or {}).get(c.id, 0)          # 0 mail · 1 list · 2 cal — the DUPLICATE stencil's second key
             t_open[i] = hz.slot_of(c.release_ns) if c.release_ns else 0
             t_due[i] = hz.slot_of(c.due.latest_ns) if c.due.latest_ns else nslot - 1
             work[i] = d * max(c.p_promoted, 0.02)
@@ -119,7 +124,7 @@ class FieldBridge:
         supply = work.copy()
         lawwords = (ncls * nseat + 31) // 32; armwords = (nseat + 31) // 32
         law = np.full(lawwords, 0xFFFFFFFF, np.uint32); arm_mask = np.zeros(armwords, np.uint32)
-        hdr = struct.pack("<4sIiiiiffiiQfi8x", b"ISOB", 1, N, nseat, nslot, ncls, self.T, self.late_penalty, self.iters, 0, self.seed, 0.95, COARSE_D)
+        hdr = struct.pack("<4sIiiiiffiiQfi8x", b"ISOB", 1, N, nseat, nslot, ncls, self.T, self.late_penalty, self.iters, 0, self.seed, 0.80, COARSE_D)
         assert len(hdr) == 64
         path = self.workdir / "lattice.bin"
         with open(path, "wb") as f:
@@ -127,8 +132,10 @@ class FieldBridge:
             for arr in (entity, cls, dur, src, t_open, t_due, work, dep, inc, flags, tw, paid, waiting, emb.reshape(-1), emb_scale,
                         seat_key.reshape(-1), seat_scale, cap, supply, law, arm_mask):
                 f.write(np.ascontiguousarray(arr).tobytes())
+        self.exe = find_instrument(prefer="cpu" if N * M < CPU_BELOW_PAIRS else "gpu")
         meta = {"N": N, "M": M, "nslot": nslot, "per_day": hz.per_day, "total_work": total, "waiting_mass": wmass,
-                "embedder": self.embedder.kind, "rows": [c.id for c in rows], "cap_stocks": [float(cap[nseat * nslot + k]) for k in range(3)]}
+                "embedder": self.embedder.kind, "rows": [c.id for c in rows], "cap_stocks": [float(cap[nseat * nslot + k]) for k in range(3)],
+                "instrument": self.exe.name}
         return path, meta
 
     def tick(self, lattice: Path, bench: bool = True) -> tuple[dict, Path]:
@@ -168,7 +175,7 @@ class FieldBridge:
 
     def binding_days(self, d: dict, k: int = 3) -> list[str]:
         dp = self.day_prices(d)
-        return [lab for lab, p in sorted(dp, key=lambda t: -t[1])[:k] if p > 1e-6]
+        return [lab for lab, price in sorted(dp, key=lambda t: -t[1])[:k] if price > 1e-6]
 
     def field_delta_line(self, d: dict, rows: list[Commitment], es_prev: Optional[list[float]] = None) -> str:
         parts = []

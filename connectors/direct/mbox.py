@@ -2,15 +2,30 @@
 from __future__ import annotations
 
 import email
+import email.header
+import email.policy
 import email.utils
 import hashlib
 import mailbox
 import time
 from email.message import Message
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from isobard.contracts import Observation, blake128
+
+_POLICY = email.policy.compat32
+
+
+def _hdr(v: Any) -> str:
+    """A header as a plain str: RFC 2047 decoded, raw 8-bit bytes recovered, never a Header object."""
+    if v is None:
+        return ""
+    try:
+        s = str(email.header.make_header(email.header.decode_header(str(v))))
+    except Exception:
+        s = str(v)
+    return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace").replace("\n", " ").strip()
 
 
 def _body(msg: Message) -> str:
@@ -43,10 +58,11 @@ class MboxConnector:
     lanes = ("mail",)
     consent_class = "standard"
 
-    def __init__(self, path: Path, owner_email: str = "", source_name: str = "mbox"):
+    def __init__(self, path: Path, owner_email: str = "", source_name: str = "mbox", ingest_ns: Optional[int] = None):
         self.path = Path(path)
         self.owner_email = owner_email.lower()
         self.source_name = source_name
+        self.ingest_ns = ingest_ns
 
     def capabilities(self) -> list:
         return []  # read-only export: no effects
@@ -61,20 +77,20 @@ class MboxConnector:
 
     def backfill(self, since_ns: int = 0, cursor: Optional[str] = None) -> Iterator[tuple[Observation, dict]]:
         """Yields (Observation, parsed) where parsed carries the fields the plane's CODE stage uses."""
-        now = time.time_ns()
+        now = self.ingest_ns or time.time_ns()
         for msg in self._messages():
             occ = _ns(msg)
             if occ < since_ns:
                 continue
-            mid = (msg.get("Message-ID") or "").strip() or hashlib.blake2b(msg.as_bytes(), digest_size=8).hexdigest()
-            body = _body(msg)
-            headers = {k: msg.get(k, "") for k in ("From", "To", "Cc", "Subject", "Message-ID", "In-Reply-To", "References", "Date")}
+            mid = _hdr(msg.get("Message-ID")) or hashlib.blake2b(msg.as_bytes(), digest_size=8).hexdigest()
+            body = _body(msg).encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+            headers = {k: _hdr(msg.get(k)) for k in ("From", "To", "Cc", "Subject", "Message-ID", "In-Reply-To", "References", "Date")}
             text = f"From: {headers['From']}\nTo: {headers['To']}\nSubject: {headers['Subject']}\nDate: {headers['Date']}\n\n{body}"
             payload = text.encode("utf-8")
             frm = email.utils.parseaddr(headers["From"])[1].lower()
             obs = Observation(
                 lane="mail", source=self.source_name, external_id=mid, src_rev=0, occurred_ns=occ, ingested_ns=now,
-                thread_id=(msg.get("In-Reply-To") or msg.get("References", "").split()[-1:] or [mid])[0].strip() if (msg.get("In-Reply-To") or msg.get("References")) else mid,
+                thread_id=(headers["In-Reply-To"] or (headers["References"].split() or [mid])[-1]).strip() if (headers["In-Reply-To"] or headers["References"]) else mid,
                 payload_ref="inline:" + text, digest=blake128(payload),
                 intake_trust="operator" if (self.owner_email and frm == self.owner_email) else "untrusted",
             ).with_id()

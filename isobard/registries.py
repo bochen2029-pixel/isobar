@@ -112,6 +112,20 @@ class People:
         floors = self.tiers.get("tiers", {})
         a.silence_price_floor = float((floors.get(a.tier) or floors.get(str(a.tier)) or {}).get("silence_price_floor", 0.3))
 
+    def mention(self, text: str) -> Optional[str]:
+        """The list lane's counterparty: exactly one known actor named in the text (a name token of
+        three or more letters, or its possessive), else None. Never the owner."""
+        t = " " + re.sub(r"[^a-z0-9' ]+", " ", text.lower()) + " "
+        hits: set[str] = set()
+        for a in self.by_id.values():
+            if a.id == self.owner_id:
+                continue
+            for p in (p for p in a.display_name.lower().split() if len(p) >= 3):
+                if f" {p} " in t or f" {p}'s " in t:
+                    hits.add(a.id)
+                    break
+        return next(iter(hits)) if len(hits) == 1 else None
+
     def tier_weight(self, actor_id: Optional[str]) -> float:
         """The multiplier on lateness in place_cost. Tier 1 = 2.0 … tier 4 = 0.5; unknown = 1.0."""
         a = self.by_id.get(actor_id or "")

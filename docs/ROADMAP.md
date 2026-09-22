@@ -41,6 +41,13 @@
 | **F-BASELINE** | *the field is not decoration* | a cached turn-based system at equal evidence loses on F-PRICE and outcomes | withhold the field from it | M6 |
 | **O1–O9** | *the instrument is real* | one dynamics source · determinism · conservation · stocks priced · int8 precision · duplicate recall · parity · K_PAID · paired arrived grading | as in `ledger_lattice.cu --lie` | M0–M4a |
 
+## Status
+
+| M | state | receipt |
+|---|---|---|
+| **M0** | **built; green on the gym (2026-09-22)** — 29/29 tests; instrument 8/8 oracles on three compilers with lie arms; 7/7 plants at precision 1.00 with a perfect reflex; monotone sweep; replay byte-identical. **Owner-facing half pending:** F-RECOVERY on pilot owners, F-JEV on 200 owner-labelled emails with the Laya weights. Composio adapter not yet wired (no key on this box); direct file adapters carry M0 | `receipts/M0_GATE_2026-09-22.md` |
+| M1 | next | — |
+
 ## Standing from M0
 
 `replay --verify` on every commit · the arithmetic line on every tick · the injection corpus in CI · the threshold twin in shadow from M3 · κ weekly from M4 · the lie arms on every selftest.
@@ -54,3 +61,8 @@
 | 2026-09-22 | The resident is SHADOW by default and is raced against a threshold twin before LIVE | SEPARATION's F2 at personal radius; the inbox is sparse |
 | 2026-09-22 | v1 plane in Python 3.13; both solver instruments in C++17/CUDA; the resident mounted from nib | fastest honest path to M0; the contracts bind, the language does not |
 | 2026-09-22 | `K_PAID` is release-blocking | the single worst error the product can make is chasing a paid invoice |
+| 2026-09-22 | A discharge or a merge happens only on a **keyed** join (exact or lexical); the embedding's candidates ride the row and never change state | the arity law in code: identity is relational; a stub-wrong `is_discharge` on an embedding neighbour discharged every plant before this rule existed |
+| 2026-09-22 | Instruction-shaped mail enters the tape only as `contested`, which never reaches the field or the scan | L13; the injection plant is flagged by the deterministic pre-filter regardless of the reflex |
+| 2026-09-22 | Under 10⁶ (row, cell) pairs the **CPU reference is the tier**; the roofline's regime is keyed on the working set, not on counted per-pair bytes | a 15-row lattice is a 5.75 KB working set: 17 ms on the CPU, 44 ms launch-bound on the GPU; "the card is justified" prints only in the streaming regime above the floor |
+| 2026-09-22 | The gate's recovery is scored by the plant's own message marker, never by type + counterparty | spurious findings at low competence otherwise counted as recoveries |
+| 2026-09-22 | A perfect stub (c = 1.0) proves the pipeline; the seed-averaged sweep proves it degrades with the reflex; F-JEV is the only measurement of a reflex | the stub is not a reflex |

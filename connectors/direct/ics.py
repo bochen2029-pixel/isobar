@@ -41,10 +41,11 @@ class IcsConnector:
     lanes = ("cal",)
     consent_class = "standard"
 
-    def __init__(self, path: Path, horizon_days: int = 14, source_name: str = "ics"):
+    def __init__(self, path: Path, horizon_days: int = 14, source_name: str = "ics", ingest_ns: Optional[int] = None):
         self.path = Path(path)
         self.horizon_days = horizon_days
         self.source_name = source_name
+        self.ingest_ns = ingest_ns
 
     def capabilities(self) -> list:
         return []
@@ -65,7 +66,7 @@ class IcsConnector:
                     cur[key + "_PARAMS"] = k.split(";", 1)[1]
 
     def backfill(self, since_ns: int = 0, cursor: Optional[str] = None) -> Iterator[tuple[Observation, dict]]:
-        now = time.time_ns()
+        now = self.ingest_ns or time.time_ns()
         horizon_end = now + self.horizon_days * 86400 * 10**9
         for ev in self.events():
             try:

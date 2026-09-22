@@ -23,16 +23,17 @@ class TextListConnector:
     lanes = ("list",)
     consent_class = "standard"
 
-    def __init__(self, path: Path, source_name: str = "textfile"):
+    def __init__(self, path: Path, source_name: str = "textfile", ingest_ns: Optional[int] = None):
         self.path = Path(path)
         self.source_name = source_name
+        self.ingest_ns = ingest_ns
 
     def capabilities(self) -> list:
         return [{"target": "list.create", "reversibility": "reversible", "inverse_template": "list.delete", "hold_window_s": 0}]
 
     def backfill(self, since_ns: int = 0, cursor: Optional[str] = None) -> Iterator[tuple[Observation, dict]]:
-        now = time.time_ns()
-        mtime_ns = int(self.path.stat().st_mtime_ns)
+        now = self.ingest_ns or time.time_ns()
+        mtime_ns = self.ingest_ns or int(self.path.stat().st_mtime_ns)
         for n, raw in enumerate(self.path.read_text(encoding="utf-8", errors="replace").splitlines()):
             line = raw.strip()
             if not line or line.startswith("#"):
