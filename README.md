@@ -35,6 +35,7 @@ The laws that hold it together: the commitment is canonical; the tape is the onl
 | M | stage | state |
 |---|---|---|
 | **M0** | the X-ray: connect read-only, compile the mail, price the horizon, show the glass | **green on the gym** |
+| **M0.5** | the hand in text (forwards, pastes, capture states, the three grade cases, the typed reply), UNRESOLVED as the fourth stock, the keyed re-join on a tick, cone invalidation, the island with held effects | **green on the gym** (`receipts/M0.5_GATE_2026-09-22.md`; 40/40 tests) |
 | M1 | the multiverse and the wager: every price a band, every promise a survival forecast, the pipper graded on arrival | next |
 | M2 | the composer: the forecast in the gutter while the reply is typed; the un-say | |
 | M3 | presence: the resident on the field lane, SHADOW first, raced blind against a threshold twin | |
@@ -56,6 +57,9 @@ python -m isobard.cli gym  --out runs/gym/owner1
 python -m isobard.cli scan --owner runs/gym/owner1 --competence 1.0      the X-ray, the field, the glass (store/glass.html)
 python -m isobard.cli replay --store runs/gym/owner1/store --verify      the folds rebuilt from the tape, byte for byte
 python -m isobard.cli sweep --owner runs/gym/owner1                      O-MONO across stub competence and seeds
+python -m isobard.cli scan --owner runs/gym/owner1 --island --ticks 4    the cable out: 24 synthetic hours of ticks, effects held, the field still moving
+python -m isobard.cli island --store runs/gym/owner1/store --verify     an island-labelled run must carry its refusal rows (the lie arm is refused)
+python -m isobard.cli hand audit --store runs/gym/owner1/store           every capture reached a terminal state within budget (F-SEALED)
 ```
 
 A real owner runs the same `scan` against a directory of brand-agnostic exports: `mail.mbox` (or `eml/`), `calendar.ics`, `todo.txt`, `contacts.vcf`, an optional `money.csv` verdict export, `tiers.yaml`, `owner.json`. Gmail, Outlook, IMAP, Google Calendar, CalDAV, Todoist, plain text: all of them export these.

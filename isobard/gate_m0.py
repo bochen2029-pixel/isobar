@@ -22,6 +22,12 @@ PLANTS = {
     "promise_past_due": ("PROMISE_PAST_DUE", "re: mockups"),
     "duplicate": ("DUPLICATE", "drawings"),
 }
+# the hand's plants (M0.5): true findings the X-ray must also carry, scored apart from recall on the mail plants
+HAND_TRUE = {
+    "unresolved_f1": ("UNRESOLVED_CAPTURE", "site visit"),
+    "unresolved_p2": ("UNRESOLVED_CAPTURE", "q-5521"),
+    "unresolved_p3": ("UNRESOLVED_CAPTURE", "maybe thursday"),
+}
 
 
 def _text(f: dict, commitments: dict[str, dict]) -> str:
@@ -35,7 +41,7 @@ def score_against_truth(truth: dict, findings: list[dict], commitments: dict[str
     checks: dict[str, bool] = {}
     for key, (ftype, marker) in PLANTS.items():
         checks[key] = any(f["finding_type"] == ftype and marker in _text(f, commitments) for f in findings)
-    true_findings = sum(1 for f in findings if any(f["finding_type"] == t and m in _text(f, commitments) for t, m in PLANTS.values()))
+    true_findings = sum(1 for f in findings if any(f["finding_type"] == t and m in _text(f, commitments) for t, m in list(PLANTS.values()) + list(HAND_TRUE.values())))
     precision = true_findings / len(findings) if findings else 1.0
     paid_never_chased = not any(f.get("amount_minor") == plants["paid_unseen"]["amount_minor"] for f in findings)
     # an instruction-shaped mail may enter the tape only as a CONTESTED candidate (never in the field, never scanned)

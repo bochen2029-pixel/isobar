@@ -17,19 +17,26 @@ jobs:
         run: |
           mkdir -p solver/build
           g++ -O2 -std=c++17 -x c++ -DISOBAR_CPU -o solver/build/isobar_field_wsl solver/isobar_field.cu
-      - name: the instrument's oracles, and one lie arm that must fail its oracle
+      - name: the instrument's oracles, and two lie arms that must fail their oracle
         run: |
           ./solver/build/isobar_field_wsl --selftest
           ./solver/build/isobar_field_wsl --selftest --lie 3 | grep -E "FAILED \(correct\)"
+          ./solver/build/isobar_field_wsl --selftest --lie 4 | grep -E "FAILED \(correct\)"
       - name: python deps
         run: pip install -r requirements.txt
       - name: the battery
         run: python -m pytest tests/ -q
-      - name: the X-ray on the gym, and the replay
+      - name: the X-ray on the gym, the island with ticks, the hand audit, and the replay
         run: |
           python -m isobard.cli gym --out runs/gym/ci --seed 7
-          python -m isobard.cli scan --owner runs/gym/ci --competence 1.0 --no-bench
+          python -m isobard.cli scan --owner runs/gym/ci --competence 1.0 --no-bench --island --ticks 4 --tick-hours 6
+          python -m isobard.cli island --store runs/gym/ci/store --verify
+          python -m isobard.cli hand audit --store runs/gym/ci/store
           python -m isobard.cli replay --store runs/gym/ci/store --verify
+      - name: the island's lie arm must be refused
+        run: |
+          ISOBAR_NETWORK=present python -m isobard.cli scan --owner runs/gym/ci --store runs/gym/ci/store_lie --competence 1.0 --no-bench --no-glass --ticks 1
+          if python -m isobard.cli island --store runs/gym/ci/store_lie --verify; then echo "the lie arm verified as an island run: BROKEN ORACLE"; exit 1; fi
       - name: keep the receipt
         uses: actions/upload-artifact@v4
         with:

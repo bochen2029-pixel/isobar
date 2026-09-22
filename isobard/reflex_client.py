@@ -23,6 +23,7 @@ from .contracts import Cell, CellField, Provenance
 
 ROOT = Path(__file__).resolve().parents[1]
 QUESTIONS_PATH = ROOT / "reflex" / "questions.yaml"
+NOTE_QUESTIONS_PATH = ROOT / "reflex" / "questions_note.yaml"
 
 
 @dataclass
@@ -190,9 +191,20 @@ def make_reflex(provider: str, **kw: Any) -> Any:
 # the client
 # ----------------------------------------------------------------------------------------------
 class ReflexClient:
-    def __init__(self, provider: Any, questions: Optional[QuestionSet] = None):
+    def __init__(self, provider: Any, questions: Optional[QuestionSet] = None, note_questions: Optional[QuestionSet] = None):
         self.provider = provider
         self.qs = questions or QuestionSet.load()
+        self.note_qs = note_questions or (QuestionSet.load(NOTE_QUESTIONS_PATH) if NOTE_QUESTIONS_PATH.exists() else None)
+
+    def compile_note(self, observation_id: str, note: str) -> Cell:
+        """The owner's note above a forward is TESTIMONY: compiled under its own question set, never as evidence."""
+        assert self.note_qs is not None, "reflex/questions_note.yaml missing"
+        t0 = time.perf_counter_ns()
+        framed = frame(note, observation_id[:8] + "n")
+        fields = self.provider.compile(framed, self.note_qs.main(), observation_id=observation_id + ":note")
+        return Cell(observation_id=observation_id, provider=self.provider.provider_id, provider_fp=self.provider.provider_fp,
+                    questions_version=self.note_qs.version, question_set="note", fields=fields,
+                    latency_us=(time.perf_counter_ns() - t0) // 1000, depends_on=[observation_id]).with_id()
 
     def compile(self, observation_id: str, evidence: str, nonce: str = "") -> Cell:
         t0 = time.perf_counter_ns()
@@ -203,8 +215,8 @@ class ReflexClient:
             f = fields["injection_shape"]
             fields["injection_shape"] = CellField(value=True, p=max(f.p, 0.5), provenance="HIGH")
         return Cell(observation_id=observation_id, provider=self.provider.provider_id,
-                    provider_fp=self.provider.provider_fp, questions_version=self.qs.version,
-                    fields=fields, latency_us=(time.perf_counter_ns() - t0) // 1000).with_id()
+                    provider_fp=self.provider.provider_fp, questions_version=self.qs.version, question_set="mail",
+                    fields=fields, latency_us=(time.perf_counter_ns() - t0) // 1000, depends_on=[observation_id]).with_id()
 
     def same_as(self, evidence: str, candidate_text: str) -> tuple[bool, float]:
         q = next(q for q in self.qs.questions if q.name == "same_as_candidate")

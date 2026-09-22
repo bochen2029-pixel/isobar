@@ -9,7 +9,7 @@ import pytest
 
 from isobard.contracts import Commitment, Due, Effort
 from isobard.embed import Embedder
-from isobard.field import FieldBridge, Horizon, find_instrument
+from isobard.field import N_STOCK, FieldBridge, Horizon, find_instrument
 
 try:
     find_instrument()
@@ -42,10 +42,11 @@ def test_tick_round_trip_and_determinism(tmp_path):
     rows = _rows()
     lattice, meta = br.build(rows, allocations=[(14, 16), (42, 44)], tier_w={"lopez": 2.0, "mom": 2.0, "ferry": 1.4}, paid_ids=set(),
                              actor_index={"lopez": 1, "mom": 2, "ferry": 3, "me": 4}, texts={}, src_of={"c1": 0, "c2": 0, "c3": 0})
-    assert meta["N"] == 3 and meta["M"] == hz.nslot + 3 and meta["waiting_mass"] > 0
+    assert meta["N"] == 3 and meta["M"] == hz.nslot + N_STOCK and N_STOCK == 4 and meta["waiting_mass"] > 0
     d1, _ = br.tick(lattice, bench=False)
     assert d1["N"] == 3 and d1["M"] == meta["M"] and len(d1["v"]) == meta["M"] and len(d1["es"]) == 3
     assert d1["stock_prices"]["WAITING"] > 0, "the WAITING stock must be priced when the silence budget binds"
+    assert "UNRESOLVED" in d1["stock_prices"]
     assert "sink_ms" in d1["arithmetic"] and d1["arithmetic"]["measured_peak"] is False
     f = br.to_contract(d1, state_version=1)
     assert f.N == 3 and f.arithmetic is not None and f.stock_prices["WAITING"] == d1["stock_prices"]["WAITING"]

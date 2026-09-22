@@ -1,9 +1,11 @@
 """The field bridge — Commitments + registries → lattice.bin → isobar_field --tick → Field.
 
-The horizon is `horizon_days` × `slots_per_day` half-hour cells for one seat, plus the three stocks.
-A row's mass is its nominal effort in slots × p_promoted (a candidate enters at its probability,
-never at a threshold). Calendar allocations reduce a cell's capacity. Waiting rows sit in the WAITING
-stock whose dual is the price of silence. The arithmetic line prints every tick.
+The horizon is `horizon_days` × `slots_per_day` half-hour cells for one seat, plus the FOUR stocks
+(r0.2 §7.1): UNPLACED, UNADJUDICATED, WAITING, UNRESOLVED. A row's mass is its nominal effort in
+slots × p_promoted (a candidate enters at its probability, never at a threshold). Calendar
+allocations reduce a cell's capacity. Waiting rows sit in WAITING, whose dual is the price of a
+counterparty's silence; unresolved captures sit in UNRESOLVED, whose dual is the price of the
+owner's not-yet-made-sense-of life. The arithmetic line prints every tick with its regime.
 """
 from __future__ import annotations
 
@@ -23,9 +25,9 @@ from .embed import COARSE_D, Embedder
 ROOT = Path(__file__).resolve().parents[1]
 KIND_IDX = {"deliverable": 0, "payment": 1, "quote": 2, "response": 3, "appointment": 4, "document": 5, "approval": 6, "purchase": 7, "other": 8}
 CONTRA_NAMES = ["OVERCOMMIT", "DOUBLEBOOK", "DEPENDENCY", "DEADLINE", "DUPLICATE", "PAID"]
-STOCKS = ["UNPLACED", "UNADJUDICATED", "WAITING"]
-
-
+STOCKS = ["UNPLACED", "UNADJUDICATED", "WAITING", "UNRESOLVED"]
+N_STOCK = len(STOCKS)
+HEADER_VERSION = 2
 CPU_BELOW_PAIRS = 1_000_000   # the roofline decides per owner: under a million (row, cell) pairs the CPU reference is the tier
 
 
@@ -72,70 +74,87 @@ class Horizon:
 
 class FieldBridge:
     def __init__(self, workdir: Path, embedder: Embedder, horizon: Horizon, T: float = 0.25, late_penalty: float = 1.0,
-                 iters: int = 40, waiting_budget_frac: float = 0.30, seed: int = 42):
+                 iters: int = 40, waiting_budget_frac: float = 0.30, unresolved_budget_frac: float = 0.20, seed: int = 42):
         self.workdir = Path(workdir); self.workdir.mkdir(parents=True, exist_ok=True)
         self.embedder = embedder
         self.hz = horizon
-        self.T, self.late_penalty, self.iters, self.wbf, self.seed = T, late_penalty, iters, waiting_budget_frac, seed
+        self.T, self.late_penalty, self.iters, self.wbf, self.ubf, self.seed = T, late_penalty, iters, waiting_budget_frac, unresolved_budget_frac, seed
         self.exe = find_instrument()
         self.tick_id = 0
+
+    def rehorizon(self, horizon: Horizon) -> None:
+        """A tick moves `now`; the slot grid moves with it (time is a reducer, SPEC r0.2 §3.5)."""
+        self.hz = horizon
 
     def build(self, rows: list[Commitment], allocations: list[tuple[int, int]], tier_w: dict[str, float],
               paid_ids: set[str], actor_index: dict[str, int], texts: dict[str, str],
               src_of: Optional[dict[str, int]] = None) -> tuple[Path, dict]:
         hz = self.hz
         N, nseat, nslot, ncls = len(rows), 1, hz.nslot, len(KIND_IDX)
-        M = nseat * nslot + 3
+        M = nseat * nslot + N_STOCK
         entity = np.zeros(N, np.int32); cls = np.zeros(N, np.int16); dur = np.zeros(N, np.uint8); src = np.zeros(N, np.uint8)
         t_open = np.zeros(N, np.int32); t_due = np.zeros(N, np.int32); work = np.zeros(N, np.float32); dep = np.full(N, -1, np.int32)
-        inc = np.full(N, -1, np.int32); flags = np.zeros(N, np.uint32); tw = np.ones(N, np.float32); paid = np.zeros(N, np.uint8); waiting = np.zeros(N, np.uint8)
+        inc = np.full(N, -1, np.int32); flags = np.zeros(N, np.uint32); tw = np.ones(N, np.float32)
+        paid = np.zeros(N, np.uint8); waiting = np.zeros(N, np.uint8); unresolved = np.zeros(N, np.uint8)
         for i, c in enumerate(rows):
             counter = c.creditor_actor if c.debtor_actor != c.creditor_actor else c.debtor_actor
             entity[i] = actor_index.get(counter, 0)
             cls[i] = KIND_IDX.get(c.kind, 8)
             d = max(1, math.ceil(c.effort.nom_min / hz.slot_min))
             dur[i] = min(255, d)
-            src[i] = (src_of or {}).get(c.id, 0)          # 0 mail · 1 list · 2 cal — the DUPLICATE stencil's second key
+            src[i] = (src_of or {}).get(c.id, 0)          # 0 mail · 1 list · 2 cal · 3 hand — the DUPLICATE stencil's second key
             t_open[i] = hz.slot_of(c.release_ns) if c.release_ns else 0
             t_due[i] = hz.slot_of(c.due.latest_ns) if c.due.latest_ns else nslot - 1
             work[i] = d * max(c.p_promoted, 0.02)
+            if c.state == "unresolved" and c.release_ns:
+                # priced by carrying, weighted by age: a capture carried a week weighs twice what it did on day one
+                age_days = max(0.0, (int(hz.now.timestamp() * 1e9) - c.release_ns) / 86400e9)
+                work[i] *= 1.0 + age_days / 7.0
             tw[i] = tier_w.get(counter, 1.0)
             if c.id in paid_ids:
                 paid[i] = 1
             if c.state == "waiting":
                 waiting[i] = 1
                 inc[i] = nseat * nslot + 2
+            elif c.state == "unresolved":
+                unresolved[i] = 1
+                inc[i] = nseat * nslot + 3
             elif c.state == "scheduled" and c.due.earliest_ns:
                 inc[i] = hz.slot_of(c.due.earliest_ns)
-        # embeddings: full via the endpoint (or the fallback), 128-d int8 for the solver
         full = self.embedder.embed([texts.get(c.id, c.deliverable_text) for c in rows]) if N else np.zeros((0, 1024), np.float32)
         emb, emb_scale = (self.embedder.coarse_int8(full) if N else (np.zeros((0, COARSE_D), np.int8), np.zeros(0, np.float32)))
         seat_key = np.zeros((nseat, COARSE_D), np.int8); seat_scale = np.full(nseat, 1.0 / 127.0, np.float32)
-        # capacity: 1.0 per free cell, minus calendar allocations (a booked cell keeps 1e-3 so the log is finite)
         cap = np.ones(M, np.float32)
+        # time consumes slack (L16, §3.5): every cell before `now` is gone; a tick that advances the clock removes
+        # capacity, and that alone moves the prices with no message arriving
+        now_slot = hz.slot_of(int(hz.now.timestamp() * 1e9), clamp=False)
+        for s in range(0, max(0, min(nslot, now_slot))):
+            cap[s] = 1e-3
         for s0, s1 in allocations:
             for s in range(max(0, s0), min(nslot, s1)):
                 cap[s] = 1e-3
         total = float(work.sum()) or 1.0
         wmass = float(work[waiting == 1].sum())
+        umass = float(work[unresolved == 1].sum())
         cap[nseat * nslot + 0] = max(0.5, total * 0.25)
         cap[nseat * nslot + 1] = max(0.5, total * 0.05)
         cap[nseat * nslot + 2] = max(0.5, min(wmass * 0.9, total * self.wbf)) if wmass > 0 else 0.5
+        cap[nseat * nslot + 3] = max(0.5, min(umass * 0.9, total * self.ubf)) if umass > 0 else 0.5
         supply = work.copy()
         lawwords = (ncls * nseat + 31) // 32; armwords = (nseat + 31) // 32
         law = np.full(lawwords, 0xFFFFFFFF, np.uint32); arm_mask = np.zeros(armwords, np.uint32)
-        hdr = struct.pack("<4sIiiiiffiiQfi8x", b"ISOB", 1, N, nseat, nslot, ncls, self.T, self.late_penalty, self.iters, 0, self.seed, 0.80, COARSE_D)
+        hdr = struct.pack("<4sIiiiiffiiQfi8x", b"ISOB", HEADER_VERSION, N, nseat, nslot, ncls, self.T, self.late_penalty, self.iters, 0, self.seed, 0.80, COARSE_D)
         assert len(hdr) == 64
         path = self.workdir / "lattice.bin"
         with open(path, "wb") as f:
             f.write(hdr)
-            for arr in (entity, cls, dur, src, t_open, t_due, work, dep, inc, flags, tw, paid, waiting, emb.reshape(-1), emb_scale,
+            for arr in (entity, cls, dur, src, t_open, t_due, work, dep, inc, flags, tw, paid, waiting, unresolved, emb.reshape(-1), emb_scale,
                         seat_key.reshape(-1), seat_scale, cap, supply, law, arm_mask):
                 f.write(np.ascontiguousarray(arr).tobytes())
         self.exe = find_instrument(prefer="cpu" if N * M < CPU_BELOW_PAIRS else "gpu")
-        meta = {"N": N, "M": M, "nslot": nslot, "per_day": hz.per_day, "total_work": total, "waiting_mass": wmass,
-                "embedder": self.embedder.kind, "rows": [c.id for c in rows], "cap_stocks": [float(cap[nseat * nslot + k]) for k in range(3)],
-                "instrument": self.exe.name}
+        meta = {"N": N, "M": M, "nslot": nslot, "per_day": hz.per_day, "total_work": total, "waiting_mass": wmass, "unresolved_mass": umass,
+                "embedder": self.embedder.kind, "rows": [c.id for c in rows], "cap_stocks": [float(cap[nseat * nslot + k]) for k in range(N_STOCK)],
+                "instrument": self.exe.name, "header_version": HEADER_VERSION}
         return path, meta
 
     def tick(self, lattice: Path, bench: bool = True) -> tuple[dict, Path]:
@@ -154,7 +173,7 @@ class FieldBridge:
         self.tick_id += 1
         return d, out
 
-    def to_contract(self, d: dict, state_version: int) -> Field_:
+    def to_contract(self, d: dict, state_version: int, depends_on: Optional[list[str]] = None) -> Field_:
         contra = [Contra(a=c["a"], b=(None if c["b"] < 0 else c["b"]), kind=CONTRA_NAMES[c["kind"]], weight=c["w"]) for c in d.get("contra", [])]
         arith = d.get("arithmetic", {})
         return Field_(tick_id=self.tick_id, state_version=state_version, N=d["N"], M=d["M"], v=d["v"], u=d["u"], es=d["es"], risk=d["risk"],
@@ -162,7 +181,7 @@ class FieldBridge:
                       binding_days=self.binding_days(d), delta_v_norm=max(0.0, float(d.get("delta_v_norm", -1))),
                       arithmetic=Arithmetic(bytes=arith.get("bytes", 0), ms=arith.get("sink_ms", 0), gbs=arith.get("gbs", 0),
                                             peak_gbs=arith.get("peak_gbs", 0), fraction=arith.get("fraction", -1)),
-                      iters=d.get("iters", 0), arm=d.get("arm", 0))
+                      iters=d.get("iters", 0), arm=d.get("arm", 0), depends_on=depends_on or [])
 
     def day_prices(self, d: dict) -> list[tuple[str, float]]:
         v = np.array(d["v"][: self.hz.nslot], dtype=np.float64)
@@ -190,6 +209,7 @@ class FieldBridge:
                     parts.append(f"#{rows[i].id[-6:]} sup {a:.1f}→{b:.1f} {'CONTESTED' if b >= 3.0 else 'DECIDED'}")
         sp = d.get("stock_prices", {})
         parts.append(f"wait {sp.get('WAITING', 0):.2f}")
+        parts.append(f"unres {sp.get('UNRESOLVED', 0):.2f}")
         dvn = d.get("delta_v_norm", -1)
         if dvn is not None and dvn >= 0:
             parts.append(f"Δv {dvn:.3f}")

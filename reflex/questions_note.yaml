@@ -1,0 +1,20 @@
+# ISOBAR reflex question set for the owner's NOTE above a forward or before a recording · version 1 · 2026-09-22
+# A note is TESTIMONY (SPEC r0.2 §5.2, L13): it is compiled under these questions and never as evidence content.
+# A correction writes a `correction` row; a policy hint is shown as a candidate `policy` diff and never applied (L24).
+version: 1
+questions:
+  - name: is_correction
+    type: noul
+    instructions: Is the owner correcting something the machine concluded (a wrong join, a wrong tier, a wrong date, "that wasn't a promise")?
+  - name: is_policy_hint
+    type: noul
+    instructions: Is the owner stating a standing preference or rule ("always chase these", "never auto-contact her", "this client is tier 1")?
+  - name: is_hypothesis
+    type: noul
+    instructions: Is the owner offering an interpretation or belief about the situation ("I think this changes Henderson", "he probably means Thursday")?
+  - name: is_question
+    type: noul
+    instructions: Is the owner asking the machine something ("does this conflict with Friday?", "what did I promise him?")?
+  - name: is_look_instruction
+    type: noul
+    instructions: Is the owner asking the machine to look at, track, or integrate the attached material with no other content ("fyi", "add this", "track this")?

@@ -46,6 +46,9 @@
 | 2026-09-22 | Instruction-shaped mail enters as `contested`, which never reaches the field or the scan | L13 |
 | 2026-09-22 | The gate's recovery is scored by the plant's own marker | spurious findings inflated recall at low competence |
 | 2026-09-22 | A perfect stub proves the pipeline; the sweep proves it degrades with the reflex; F-JEV is the only measurement of a reflex | the stub is not a reflex |
+| 2026-09-22 | `ingested_ns` and `injection_shape` are outside the observation's content address | the same item admitted on a later tick must keep its id; the first tick re-admitted the world |
+| 2026-09-22 | Cells before `now` lose their capacity on every rebuild of the lattice | time consuming slack is a mechanism, not a sentence; the field barely moved between ticks until it was |
+| 2026-09-22 | A capture with no exact id and no named actor stays UNRESOLVED; the embedding proposes and never resolves | the arity law; the ask is priced at M4b |
 | 2026-09-22 | **r0.2 D1–D12** (`docs/SPEC_r0.2.md §0.2`): rent as the organ currency, arrivals as the authority currency, never summed · one trunk with lanes at their own clocks, `[field]` races first · the hand in text at M0.5 beside M1 · state in the middle, the router only as a wager · a radius earns a solver when its transport is nameable · sealing is admission, not an effect · `wake_worthy` as a twin, never asked live · realms as masks · the projected lane behind the compiled one's collision rate · cryptographic deletion as an M4 generation event · F-GRADER from the first draft, F-SEVEN at M1 · the vigilance vector closed until the steering-vise has a receipt | the three documents of 2026-09-22 and the M0 receipt |
 
 ## Status
@@ -53,5 +56,6 @@
 | rung | state |
 |---|---|
 | M0 | **built; green on the gym**; owner-facing half pending |
-| M0.5 · M1 | next, in parallel |
+| **M0.5** | **built; green on the gym** (`receipts/M0.5_GATE_2026-09-22.md`): F-ISLAND under a declared cut with the lie arm refused, F-SEALED, the three grade cases, the keyed re-join and a resolution by exact id on a tick, UNRESOLVED priced with O8c and lie 4; 40/40 tests. **Clocks started:** F-HAND, F-HABIT (need real forwards). Unexercised live: the IMAP and SMTP legs |
+| M1 | next |
 | all others | specified in `docs/SPEC_r0.2.md`; unbuilt |

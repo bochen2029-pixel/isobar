@@ -231,6 +231,7 @@ struct Lat {
   const float*         tier_w;   // [N] the people registry's multiplier on lateness (1.0 = no registry)
   const unsigned char* paid;     // [N] 1 = the money VERDICT says paid — K_PAID: never in a chase set
   const unsigned char* waiting;  // [N] 1 = blocked on a counterparty — lives ONLY in the WAITING stock
+  const unsigned char* unresolved; // [N] 1 = a capture not yet joinable — lives in UNRESOLVED (or spills to UNPLACED)
   // --- embeddings: int8 storage, fp32 compute (T2)
   const signed char* emb;      // [N * EMB_D]
   const float*       emb_scale;// [N]
@@ -246,7 +247,9 @@ struct Lat {
 };
 
 // ISOBAR: a third stock. WAITING = with a counterparty; its dual is the price of their silence.
-enum { STOCK_UNPLACED = 0, STOCK_UNADJUDICATED = 1, STOCK_WAITING = 2, N_STOCK = 3 };
+// ISOBAR r0.2 (M0.5): a fourth. UNRESOLVED = a hand capture the plane could not yet join; its dual is the
+// price of the owner's not-yet-made-sense-of life. Distinct from UNADJUDICATED (what the OWNER must decide).
+enum { STOCK_UNPLACED = 0, STOCK_UNADJUDICATED = 1, STOCK_WAITING = 2, STOCK_UNRESOLVED = 3, N_STOCK = 4 };
 
 __host__ __device__ __forceinline__ int  col_seat(const Lat& L, int c){ return c / L.nslot; }
 __host__ __device__ __forceinline__ int  col_slot(const Lat& L, int c){ return c % L.nslot; }
@@ -283,12 +286,17 @@ float place_cost(const Lat& L, int i, int c)
     // ISOBAR: a waiting row sits in the WAITING stock (cheap, budgeted) or spills to UNPLACED (dear):
     // when the silence budget binds, the overflow prices WAITING and conservation still holds.
     // A placeable row may never sit in WAITING.
-    const bool w = (L.waiting != nullptr) && L.waiting[i];
-    if (w) return (s == STOCK_WAITING) ? (-1.0f / L.T) : (s == STOCK_UNPLACED) ? (-3.0f / L.T) : NEG_INF;
-    if (s == STOCK_WAITING) return NEG_INF;
+    const bool w  = (L.waiting    != nullptr) && L.waiting[i];
+    const bool ur = (L.unresolved != nullptr) && L.unresolved[i];
+    if (w)  return (s == STOCK_WAITING)    ? (-1.0f / L.T) : (s == STOCK_UNPLACED) ? (-3.0f / L.T) : NEG_INF;
+    // ISOBAR r0.2: an unresolved capture sits in UNRESOLVED (budgeted, priced by carrying) or spills to UNPLACED;
+    // it is never adjudicated by the solver and never waits on a counterparty it does not yet name.
+    if (ur) return (s == STOCK_UNRESOLVED) ? (-1.5f / L.T) : (s == STOCK_UNPLACED) ? (-3.0f / L.T) : NEG_INF;
+    if (s == STOCK_WAITING || s == STOCK_UNRESOLVED) return NEG_INF;   // a placeable row never sits in either
     return (s == STOCK_UNPLACED) ? (-3.0f / L.T) : (-2.0f / L.T);
   }
-  if ((L.waiting != nullptr) && L.waiting[i]) return NEG_INF;   // ISOBAR: no lawful real cell while waiting
+  if ((L.waiting    != nullptr) && L.waiting[i])    return NEG_INF;   // ISOBAR: no lawful real cell while waiting
+  if ((L.unresolved != nullptr) && L.unresolved[i]) return NEG_INF;   // ISOBAR r0.2: nor while unresolved
   const int seat = col_seat(L, c);
   const int slot = col_slot(L, c);
 
@@ -624,11 +632,11 @@ struct LatHost {
   std::vector<float> emb_scale, seat_scale;
   // ISOBAR rows
   std::vector<float> tier_w;
-  std::vector<unsigned char> paid, waiting;
+  std::vector<unsigned char> paid, waiting, unresolved;
   // planted truth (synthetic only) — what the oracles must recover
   std::vector<int> planted_dup_a, planted_dup_b;
   int planted_overcommit = 0, planted_deadline = 0, planted_dep = 0;
-  int planted_paid = 0, planted_waiting = 0;   // ISOBAR
+  int planted_paid = 0, planted_waiting = 0, planted_unresolved = 0;   // ISOBAR
 };
 
 static Lat host_view(const LatHost& H){
@@ -642,6 +650,7 @@ static Lat host_view(const LatHost& H){
   L.tier_w = H.tier_w.empty() ? nullptr : H.tier_w.data();
   L.paid = H.paid.empty() ? nullptr : H.paid.data();
   L.waiting = H.waiting.empty() ? nullptr : H.waiting.data();
+  L.unresolved = H.unresolved.empty() ? nullptr : H.unresolved.data();
   return L;
 }
 
@@ -698,11 +707,12 @@ static LatHost build_synthetic(int N, int nseat, int nslot, int ncls,
   }
   // ISOBAR: registry rows. tier_w from a planted tier (1..4); 10% of rows WAITING on a counterparty;
   // 2% planted PAID-but-open so oracle O8 has something to recover.
-  H.tier_w.assign(N, 1.f); H.paid.assign(N, 0); H.waiting.assign(N, 0);
+  H.tier_w.assign(N, 1.f); H.paid.assign(N, 0); H.waiting.assign(N, 0); H.unresolved.assign(N, 0);
   for (int i = 0; i < N; ++i) {
     const int tier = 1 + (int)(u01(seed, 73, i) * 4);
     H.tier_w[i] = (tier == 1) ? 2.0f : (tier == 2) ? 1.4f : (tier == 3) ? 1.0f : 0.5f;
     if (u01(seed, 71, i) < 0.10f) { H.waiting[i] = 1; H.planted_waiting++; }
+    else if (u01(seed, 74, i) < 0.05f) { H.unresolved[i] = 1; H.planted_unresolved++; }   // ISOBAR r0.2: 5% captures not yet joinable
     if (u01(seed, 72, i) < 0.02f) { H.paid[i] = 1;    H.planted_paid++; }
   }
 
@@ -746,11 +756,14 @@ static LatHost build_synthetic(int N, int nseat, int nslot, int ncls,
   H.cap[nseat*nslot + STOCK_UNADJUDICATED] = (float)(total_work * 0.05);  // adjudication bandwidth
   { double wm = 0; for (int i = 0; i < N; ++i) if (H.waiting[i]) wm += H.work[i];        // ISOBAR: the silence budget
     H.cap[nseat*nslot + STOCK_WAITING] = (float)std::max(0.5, wm * 0.5); }               // planted to BIND, so O8b prices it
+  { double um = 0; for (int i = 0; i < N; ++i) if (H.unresolved[i]) um += H.work[i];     // ISOBAR r0.2: the un-made-sense-of budget
+    H.cap[nseat*nslot + STOCK_UNRESOLVED] = (float)std::max(0.5, um * 0.5); }            // planted to BIND, so O8c prices it
 
   // THE INCUMBENT'S OWN ASSIGNMENT (what the CDC stream says actually happened),
   // with contradictions planted into it on purpose.
   for (int i = 0; i < N; ++i) {
-    if (H.waiting[i]) { H.inc_cell[i] = nseat*nslot + STOCK_WAITING; continue; }   // ISOBAR: waiting rows sit in their stock
+    if (H.waiting[i])    { H.inc_cell[i] = nseat*nslot + STOCK_WAITING;    continue; }   // ISOBAR: waiting rows sit in their stock
+    if (H.unresolved[i]) { H.inc_cell[i] = nseat*nslot + STOCK_UNRESOLVED; continue; }   // ISOBAR r0.2: so do unresolved captures
     const int seat = (int)(u01(seed, 51, i) * nseat);
     int slot = H.t_open[i] + (int)(u01(seed, 52, i) * 3);
     if (slot + (int)H.dur[i] > nslot) slot = std::max(0, nslot - (int)H.dur[i]);
@@ -801,7 +814,7 @@ static bool ingest_csv(LatHost& H, const char* path, int nseat, int nslot, int n
     H.work.push_back(wk); H.supply.push_back(wk); H.dep.push_back(dp);
     H.inc_cell.push_back((isea >= 0 && islo >= 0) ? isea*nslot + islo : -1);
     H.flags.push_back(0u);
-    H.tier_w.push_back(1.f); H.paid.push_back(0); H.waiting.push_back(0);   // ISOBAR: no registry on a CDC stream
+    H.tier_w.push_back(1.f); H.paid.push_back(0); H.waiting.push_back(0); H.unresolved.push_back(0);   // ISOBAR: no registry on a CDC stream
     H.emb.resize((size_t)(n+1)*EMB_D); H.emb_scale.resize(n+1);
     quantize(e, &H.emb[(size_t)n*EMB_D], H.emb_scale[n]);
     ++n;
@@ -816,6 +829,7 @@ static bool ingest_csv(LatHost& H, const char* path, int nseat, int nslot, int n
   H.cap[nseat*nslot + STOCK_UNPLACED]      = (float)(tw * 0.25);
   H.cap[nseat*nslot + STOCK_UNADJUDICATED] = (float)(tw * 0.05);
   H.cap[nseat*nslot + STOCK_WAITING]       = (float)(tw * 0.30);   // ISOBAR
+  H.cap[nseat*nslot + STOCK_UNRESOLVED]    = (float)(tw * 0.20);   // ISOBAR r0.2
   printf("cdc: ingested %d commitments from %s\n", n, path);
   return n > 0;
 }
@@ -829,7 +843,7 @@ struct Dev {
   float *work=nullptr,*cap=nullptr,*supply=nullptr,*emb_scale=nullptr,*seat_scale=nullptr;
   unsigned int *flags=nullptr,*law=nullptr,*arm_mask=nullptr;
   signed char *emb=nullptr,*seat_key=nullptr;
-  float* tier_w=nullptr; unsigned char *paid=nullptr,*waiting=nullptr;   // ISOBAR
+  float* tier_w=nullptr; unsigned char *paid=nullptr,*waiting=nullptr,*unresolved=nullptr;   // ISOBAR
   Lat L{};
 };
 
@@ -852,8 +866,9 @@ static Dev upload(const LatHost& H){
   if (!H.tier_w.empty())  { d.tier_w=up_f(H.tier_w); }
   if (!H.paid.empty())    { d.paid=dev_alloc<unsigned char>(H.paid.size()); dev_upload(d.paid,H.paid.data(),H.paid.size()); }
   if (!H.waiting.empty()) { d.waiting=dev_alloc<unsigned char>(H.waiting.size()); dev_upload(d.waiting,H.waiting.data(),H.waiting.size()); }
+  if (!H.unresolved.empty()) { d.unresolved=dev_alloc<unsigned char>(H.unresolved.size()); dev_upload(d.unresolved,H.unresolved.data(),H.unresolved.size()); }
   Lat& L = d.L;
-  L.tier_w=d.tier_w; L.paid=d.paid; L.waiting=d.waiting;
+  L.tier_w=d.tier_w; L.paid=d.paid; L.waiting=d.waiting; L.unresolved=d.unresolved;
   L.N=H.N; L.nseat=H.nseat; L.nslot=H.nslot; L.M=H.M; L.ncls=H.ncls;
   L.T=H.T; L.late_penalty=H.late_penalty;
   L.entity=d.entity; L.cls=d.cls; L.dur=d.dur; L.src=d.src;
@@ -868,7 +883,7 @@ static void release(Dev& d){
   dev_free(d.cls); dev_free(d.dur); dev_free(d.src);
   dev_free(d.work); dev_free(d.cap); dev_free(d.supply); dev_free(d.emb_scale); dev_free(d.seat_scale);
   dev_free(d.flags); dev_free(d.law); dev_free(d.arm_mask); dev_free(d.emb); dev_free(d.seat_key);
-  dev_free(d.tier_w); dev_free(d.paid); dev_free(d.waiting);   // ISOBAR
+  dev_free(d.tier_w); dev_free(d.paid); dev_free(d.waiting); dev_free(d.unresolved);   // ISOBAR
 }
 
 // ----------------------------------------------------------------------------
@@ -1081,6 +1096,8 @@ static void report(const LatHost& H, const TickOut& R, double peak_gbs, int tick
   printf("  stock UNADJUDICATED    %10.4f%s\n", p_una > 0 ? p_una : 0.f,
          (p_unp == 0.f && p_una == 0.f) ? "   [!] both stock duals zero - check the T17 fix" : "");
   printf("  stock WAITING          %10.4f   (the price of counterparties' silence)\n", p_wai > 0 ? p_wai : 0.f);
+  const float p_unr = -R.v[nseat*nslot + STOCK_UNRESOLVED];
+  printf("  stock UNRESOLVED       %10.4f   (the price of the not-yet-made-sense-of)\n", p_unr > 0 ? p_unr : 0.f);
 
   // ---------------- 2 · THE SUPPORT SPECTRUM ----------------
   printf("\n=== 2 · THE SUPPORT SPECTRUM  exp(H) per commitment ===\n");
@@ -1247,8 +1264,11 @@ static int selftest(uint64_t seed, int lie)
     TickOut R = run_tick(D2, H2, 80, 0.97f, 64);
     const float pu = -R.v[H2.nseat*H2.nslot + STOCK_UNPLACED];
     const float pa = -R.v[H2.nseat*H2.nslot + STOCK_UNADJUDICATED];
-    snprintf(buf, sizeof buf, "unplaced price %.4f, unadjudicated price %.4f (both must be > 0)", pu, pa);
-    check(pu > 1e-6f && pa > 1e-6f, "O4 stock columns are priced (the T17 fix)", buf);
+    const float pw = -R.v[H2.nseat*H2.nslot + STOCK_WAITING];
+    const float pr = -R.v[H2.nseat*H2.nslot + STOCK_UNRESOLVED];
+    snprintf(buf, sizeof buf, "unplaced %.4f, unadjudicated %.4f, waiting %.4f, unresolved %.4f (all four must be > 0)", pu, pa, pw, pr);
+    check(pu > 1e-6f && pa > 1e-6f && (H2.planted_waiting == 0 || pw > 1e-6f) && (H2.planted_unresolved == 0 || pr > 1e-6f),
+          "O4 every stock column is priced (the T17 fix, four stocks)", buf);
     release(D2);
   }
 
@@ -1282,6 +1302,11 @@ static int selftest(uint64_t seed, int lie)
     const float pw = -R.v[H.nseat*H.nslot + STOCK_WAITING];
     snprintf(buf, sizeof buf, "%d waiting rows; WAITING price %.4f (must be > 0)", H.planted_waiting, pw);
     check(H.planted_waiting == 0 || pw > 1e-6f, "O8b the WAITING stock is priced", buf);
+    // ISOBAR r0.2: and the unresolved captures sit in THEIR stock, priced by carrying, never in a real cell
+    const float pr = -R.v[H.nseat*H.nslot + STOCK_UNRESOLVED];
+    int misplaced = 0; for (int i = 0; i < H.N; ++i) if (H.unresolved[i] && R.argmax_cell[i] < H.nseat*H.nslot) ++misplaced;
+    snprintf(buf, sizeof buf, "%d unresolved rows; UNRESOLVED price %.4f (must be > 0); %d in a real cell (must be 0)", H.planted_unresolved, pr, misplaced);
+    check((H.planted_unresolved == 0 || pr > 1e-6f) && misplaced == 0, "O8c the UNRESOLVED stock is priced and holds its rows", buf);
   }
 
   // ---- THE LIE: run one oracle against a deliberately broken lattice.
@@ -1320,6 +1345,16 @@ static int selftest(uint64_t seed, int lie)
       printf("    O8 under the lie: K_PAID fired %d vs %d planted -> %s\n", hit, H.planted_paid,
              caught ? "FAILED (correct)" : "PASSED (BROKEN ORACLE)");
       release(DB);
+    } else if (lie == 4) {                // ISOBAR r0.2: drop the unresolved column — the stock empties and O8c must FAIL
+      std::fill(B.unresolved.begin(), B.unresolved.end(), (unsigned char)0);
+      for (int i = 0; i < B.N; ++i) if (H.unresolved[i]) B.inc_cell[i] = 0;   // the incumbent no longer parks them either
+      Dev DB = upload(B);
+      TickOut R = run_tick(DB, B, 24, 0.97f, 64);
+      const float pr = -R.v[B.nseat*B.nslot + STOCK_UNRESOLVED];
+      caught = !(pr > 1e-6f);             // the oracle expects a price because the ORIGINAL lattice planted rows
+      printf("    O8c under the lie: UNRESOLVED price %.6f with %d planted -> %s\n", pr, H.planted_unresolved,
+             caught ? "FAILED (correct)" : "PASSED (BROKEN ORACLE)");
+      release(DB);
     }
     if (!caught) { ++lie_missed; }
   }
@@ -1337,10 +1372,10 @@ static int selftest(uint64_t seed, int lie)
 // no padding); this instrument runs ONE tick (both arms) and writes <out>.json (the Field the plane
 // folds onto the tape) and <out>.bin (the duals, for the next tick's Δv). No JSON is parsed here.
 //
-//   header: "ISOB" u32 version=1 | i32 N nseat nslot ncls | f32 T late_penalty | i32 iters arm |
-//           u64 seed | f32 dup_cos | i32 emb_d(=EMB_D) | pad to 64
+//   header: "ISOB" u32 version=2 | i32 N nseat nslot ncls | f32 T late_penalty | i32 iters arm |
+//           u64 seed | f32 dup_cos | i32 emb_d(=EMB_D) | pad to 64        (version 2 = four stocks, r0.2)
 //   arrays: i32 entity[N] i16 cls[N] u8 dur[N] u8 src[N] i32 t_open[N] i32 t_due[N] f32 work[N]
-//           i32 dep[N] i32 inc_cell[N] u32 flags[N] f32 tier_w[N] u8 paid[N] u8 waiting[N]
+//           i32 dep[N] i32 inc_cell[N] u32 flags[N] f32 tier_w[N] u8 paid[N] u8 waiting[N] u8 unresolved[N]
 //           i8 emb[N*EMB_D] f32 emb_scale[N] i8 seat_key[nseat*EMB_D] f32 seat_scale[nseat]
 //           f32 cap[M] f32 supply[N] u32 law[lawwords] u32 arm_mask[armwords]
 // ----------------------------------------------------------------------------
@@ -1355,14 +1390,14 @@ template <class T> static bool rd(FILE* f, std::vector<T>& v, size_t n){ v.resiz
 static bool load_lattice_bin(const char* path, LatHost& H, IsobHeader& hd){
   FILE* f = fopen(path, "rb");
   if (!f) { fprintf(stderr, "cannot open %s\n", path); return false; }
-  if (fread(&hd, sizeof hd, 1, f) != 1 || memcmp(hd.magic, "ISOB", 4) != 0 || hd.version != 1 || hd.emb_d != EMB_D) {
-    fprintf(stderr, "bad lattice header (magic/version/emb_d)\n"); fclose(f); return false; }
+  if (fread(&hd, sizeof hd, 1, f) != 1 || memcmp(hd.magic, "ISOB", 4) != 0 || hd.version != 2 || hd.emb_d != EMB_D) {
+    fprintf(stderr, "bad lattice header (magic/version/emb_d): version 2 (four stocks) required\n"); fclose(f); return false; }
   const int N = hd.N, nseat = hd.nseat, nslot = hd.nslot;
   H.N=N; H.nseat=nseat; H.nslot=nslot; H.ncls=hd.ncls; H.M = nseat*nslot + N_STOCK; H.T=hd.T; H.late_penalty=hd.late_penalty;
   const size_t lawwords = ((size_t)hd.ncls*nseat + 31)/32, armwords = ((size_t)nseat + 31)/32;
   bool ok = rd(f,H.entity,N) && rd(f,H.cls,N) && rd(f,H.dur,N) && rd(f,H.src,N) && rd(f,H.t_open,N) && rd(f,H.t_due,N)
          && rd(f,H.work,N) && rd(f,H.dep,N) && rd(f,H.inc_cell,N) && rd(f,H.flags,N)
-         && rd(f,H.tier_w,N) && rd(f,H.paid,N) && rd(f,H.waiting,N)
+         && rd(f,H.tier_w,N) && rd(f,H.paid,N) && rd(f,H.waiting,N) && rd(f,H.unresolved,N)
          && rd(f,H.emb,(size_t)N*EMB_D) && rd(f,H.emb_scale,N) && rd(f,H.seat_key,(size_t)nseat*EMB_D) && rd(f,H.seat_scale,nseat)
          && rd(f,H.cap,H.M) && rd(f,H.supply,N) && rd(f,H.law,lawwords) && rd(f,H.arm_mask,armwords);
   fclose(f);
@@ -1412,9 +1447,9 @@ static int run_tick_file(const char* lat_path, const char* prev_path, const char
   write_json_farr(f, "risk", R.risk); fputc(',', f);
   fprintf(f, "\"argmax_cell\":["); for (int i=0;i<H.N;++i) fprintf(f, "%s%d", i?",":"", R.argmax_cell[i]); fprintf(f, "],");
   fprintf(f, "\"es_mean\":%.6g,\"es_sd\":%.6g,", R.es_mean, R.es_sd);
-  fprintf(f, "\"stock_prices\":{\"UNPLACED\":%.7g,\"UNADJUDICATED\":%.7g,\"WAITING\":%.7g},",
+  fprintf(f, "\"stock_prices\":{\"UNPLACED\":%.7g,\"UNADJUDICATED\":%.7g,\"WAITING\":%.7g,\"UNRESOLVED\":%.7g},",
           std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_UNPLACED]), std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_UNADJUDICATED]),
-          std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_WAITING]));
+          std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_WAITING]), std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_UNRESOLVED]));
   fprintf(f, "\"other_arm\":{\"es_mean\":%.6g,\"unplaced_price\":%.7g,\"waiting_price\":%.7g},",
           R2.es_mean, std::max(0.f, -R2.v[H.nseat*H.nslot+STOCK_UNPLACED]), std::max(0.f, -R2.v[H.nseat*H.nslot+STOCK_WAITING]));
   fprintf(f, "\"by_kind\":{"); for (int k=0;k<K_N;++k) fprintf(f, "%s\"%d\":%llu", k?",":"", k, (unsigned long long)R.by_kind[k]); fprintf(f, "},");
@@ -1427,8 +1462,9 @@ static int run_tick_file(const char* lat_path, const char* prev_path, const char
           R.sink_ms, R.bytes_moved, gbs, peak, peak > 0 ? gbs/peak : -1.0, bench ? "true" : "false");
   fclose(f);
   FILE* fb = fopen(bp.c_str(), "wb"); if (fb) { int32_t M = H.M; fwrite(&M, 4, 1, fb); fwrite(R.v.data(), 4, M, fb); fclose(fb); }
-  printf("tick: N=%d M=%d iters=%d sink %.2f ms  dv=%.4g  contra=%d  waiting=%.4f  peak=%s\n",
-         H.N, H.M, R.iters, R.sink_ms, dvn, R.n_contra, std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_WAITING]), bench ? "measured" : "skipped");
+  printf("tick: N=%d M=%d iters=%d sink %.2f ms  dv=%.4g  contra=%d  waiting=%.4f  unresolved=%.4f  peak=%s\n",
+         H.N, H.M, R.iters, R.sink_ms, dvn, R.n_contra, std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_WAITING]),
+         std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_UNRESOLVED]), bench ? "measured" : "skipped");
   return 0;
 }
 

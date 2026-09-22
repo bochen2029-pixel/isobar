@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 OWNER = ("Bo Owner", "owner@isobar.example")
+HAND = "isobar@isobar.example"          # the forward address the owner owns
 PEOPLE = [
     ("Maria Lopez", "lopez@acme.example", "client", 1),
     ("Dan Henderson", "dan@henderson.example", "client", 1),
@@ -154,6 +155,66 @@ class World:
         for key in ("silent_quote", "paid_unseen", "overdue_true", "customer_waiting", "we_are_waiting", "promise_past_due", "duplicate", "mom_response", "maybe_thursday"):
             self.truth["commitment_bearing"].append(P[key]["mid"])
         self.truth["not_commitment"].append(P["injection"]["mid"])
+        # a background FYI from Sam the owner will later forward (the seen-and-dismissed case)
+        m = self.mail(7, sam, OWNER, "Site visit notes", "Sharing my notes from the site visit for your records. No reply needed.")
+        P["fyi_sam"] = {"mid": m["mid"], "counterparty": sam[1], "expect": "NOT_COMMITMENT"}
+        self.truth["not_commitment"].append(m["mid"])
+
+    # ---- the hand (M0.5): forwards to the hand address, pastes, and mail that arrives after now ----
+    def hand(self) -> None:
+        P = self.truth["plants"]
+        lopez, hend, priya, ferry, ana, mom, sam, lee, _, jo = PEOPLE
+        H: dict = {}
+        self.forwards: list[dict] = []
+        self.pastes: list[dict] = []
+        self.future: list[dict] = []
+
+        def fwd(days_ago: float, original: dict, note: str, key: str, expect: dict, payload_truth: dict, note_truth: dict) -> None:
+            mid = f"<f{len(self.forwards) + 1:03d}@isobar.example>"
+            body = (note + "\n\n" if note else "") + "---------- Forwarded message ---------\n" + \
+                   f"From: {original['from'][0]} <{original['from'][1]}>\nDate: {_rfc(original['dt'])}\nSubject: {original['subject']}\n" + \
+                   f"To: {original['to'][0]} <{original['to'][1]}>\n\n{original['body']}\n"
+            self.forwards.append({"mid": mid, "dt": self.now - timedelta(days=days_ago), "subject": "Fwd: " + original["subject"], "body": body,
+                                  "payload_truth": payload_truth, "note_truth": note_truth})
+            H[key] = {"mid": mid, "original_mid": original.get("mid"), **expect}
+
+        # F1 · seen and dismissed: the owner forwards Sam's FYI that the plane read as not-commitment-bearing
+        orig = next(m for m in self.msgs if m["mid"] == P["fyi_sam"]["mid"])
+        fwd(2.5, orig, "track this — Sam mentioned a site visit", "seen_dismissed", {"expect_case": "seen_dismissed", "expect_state": "UNRESOLVED"},
+            payload_truth=T(), note_truth={"is_correction": False, "is_policy_hint": False, "is_hypothesis": False, "is_question": False, "is_look_instruction": True})
+        # F2 · unseen: a portal notification the passive mail lane never carried
+        portal = {"from": ("Permit Portal", "notifications@portal.example"), "to": OWNER, "subject": "Permit application #7781 requires a response",
+                  "body": "Your permit application #7781 requires a response by 2026-09-30. Log in to the portal to respond.",
+                  "dt": self.now - timedelta(days=3, hours=2)}
+        fwd(2.0, portal, "", "unseen", {"expect_case": "unseen", "expect_state": "LINKED", "channel": "domain:portal.example"},
+            payload_truth=T(is_commitment_bearing=True, direction="we_owe", kind="response", due_mentioned=True, due_hardness="hard", is_request_of_me=True, counterparty_waiting=True),
+            note_truth={})
+        # F3 · seen and in state: the owner forwards their own Lopez proposal with a policy note
+        orig = next(m for m in self.msgs if m["mid"] == P["silent_quote"]["mid"])
+        fwd(1.5, orig, "Lopez is tier 1 — chase this Friday if still silent", "seen_in_state", {"expect_case": "seen_in_state", "expect_state": "DUPLICATE", "note_kind": "policy_hint"},
+            payload_truth=T(is_commitment_bearing=True, direction="they_owe", kind="quote", touches_money=True, we_are_waiting=True),
+            note_truth={"is_correction": False, "is_policy_hint": True, "is_hypothesis": False, "is_question": False, "is_look_instruction": False})
+
+        def paste(days_ago: float, name: str, text: str, key: str, expect: dict, truth: dict) -> None:
+            dt = self.now - timedelta(days=days_ago)
+            fn = f"{dt.strftime('%Y%m%d-%H%M')}_{name}.txt"
+            self.pastes.append({"file": fn, "text": text, "truth": truth})
+            H[key] = {"file": fn, **expect}
+
+        # P1 · links by the entity+lexical key to the Henderson drawings row (Dan + revised, drawings, loading, dock)
+        paste(3.0, "dan", "Dan wants the revised loading dock drawings by next Thursday", "paste_linked",
+              {"expect_state": "LINKED", "method": "lexical"}, T(is_commitment_bearing=True, direction="we_owe", kind="deliverable", due_mentioned=True, due_hardness="firm"))
+        # P2 · a quote reference the tape does not carry yet: UNRESOLVED at scan, RESOLVED by exact id on the tick when Priya's mail arrives
+        paste(2.0, "quote", "Q-5521 accepted on their side, start Monday", "paste_resolves",
+              {"expect_state": "UNRESOLVED", "then": "RESOLVED", "key": "Q-5521", "method": "exact"}, T())
+        # P3 · no entity, no id, no shared tokens: stays UNRESOLVED, carried in the stock, re-asked each tick
+        paste(1.0, "he", "he said maybe Thursday", "paste_stays", {"expect_state": "UNRESOLVED", "stays": True}, T())
+
+        # the future: mail that arrives after `now` (admitted by ticks)
+        self.future.append({"mid": "<fut001@isobar.example>", "dt": self.now + timedelta(hours=25), "from": priya, "to": OWNER,
+                            "subject": "Quote 5521 — annex install", "body": "Hi Bo, quote 5521 is accepted on our side; can you start Monday? Please confirm.",
+                            "truth": T(is_commitment_bearing=True, direction="we_owe", kind="response", is_request_of_me=True, counterparty_waiting=True, touches_money=True)})
+        self.truth["hand"] = H
 
     # ---- outputs ----
     def write(self, out: Path) -> None:
@@ -203,15 +264,42 @@ class World:
             for name, mail, rel, tier in PEOPLE:
                 f.write(f"  - {{identity: {mail}, tier: {tier}, relation: {rel}}}\n")
             f.write("never_auto_contact: [mom@family.example]\n")
+        # the hand lane: forwards to the hand address, the paste folder, and the future
+        with open(out / "hand.mbox", "w", encoding="utf-8", newline="\n") as f:
+            for m in sorted(getattr(self, "forwards", []), key=lambda x: x["dt"]):
+                f.write(f"From {OWNER[1]} {m['dt'].strftime('%a %b %d %H:%M:%S %Y')}\n")
+                f.write(f"From: {OWNER[0]} <{OWNER[1]}>\nTo: ISOBAR <{HAND}>\nSubject: {m['subject']}\nDate: {_rfc(m['dt'])}\nMessage-ID: {m['mid']}\n")
+                f.write("Content-Type: text/plain; charset=utf-8\n\n" + m["body"].replace("\nFrom ", "\n>From ") + "\n\n")
+        (out / "hand" / "paste").mkdir(parents=True, exist_ok=True)
+        for p in getattr(self, "pastes", []):
+            (out / "hand" / "paste" / p["file"]).write_text(p["text"] + "\n", encoding="utf-8")
+        with open(out / "future.mbox", "w", encoding="utf-8", newline="\n") as f:
+            for m in getattr(self, "future", []):
+                f.write(f"From {m['from'][1]} {m['dt'].strftime('%a %b %d %H:%M:%S %Y')}\n")
+                f.write(f"From: {m['from'][0]} <{m['from'][1]}>\nTo: {m['to'][0]} <{m['to'][1]}>\nSubject: {m['subject']}\nDate: {_rfc(m['dt'])}\nMessage-ID: {m['mid']}\n")
+                f.write("Content-Type: text/plain; charset=utf-8\n\n" + m["body"] + "\n\n")
+        stub = {m["mid"]: m["truth"] for m in self.msgs}
+        for m in getattr(self, "forwards", []):
+            stub[m["mid"]] = m["payload_truth"]
+            if m["note_truth"]:
+                stub[m["mid"] + ":note"] = m["note_truth"]
+        for p in getattr(self, "pastes", []):
+            stub[p["file"]] = p["truth"]
+        for m in getattr(self, "future", []):
+            stub[m["mid"]] = m["truth"]
         (out / "truth.json").write_text(json.dumps(self.truth, indent=1, default=str), encoding="utf-8")
-        (out / "stub_truth.json").write_text(json.dumps({m["mid"]: m["truth"] for m in self.msgs}, indent=0), encoding="utf-8")
-        (out / "owner.json").write_text(json.dumps({"name": OWNER[0], "email": OWNER[1], "now": self.now.isoformat()}), encoding="utf-8")
+        (out / "stub_truth.json").write_text(json.dumps(stub, indent=0), encoding="utf-8")
+        # the gym owner has BOTH a direct IMAP hand mailbox (remote: refused NETWORK_ABSENT on the island, credentials
+        # absent otherwise) and the mbox export beside it, so an island run has something remote to refuse
+        (out / "owner.json").write_text(json.dumps({"name": OWNER[0], "email": OWNER[1], "now": self.now.isoformat(), "hand_address": HAND,
+                                                    "hand_backend": "imap", "hand_imap": {"host": "imap.isobar.example", "user": OWNER[1]}}), encoding="utf-8")
 
 
 def generate(out: Path, seed: int = 7, days: int = 90) -> World:
     w = World(seed, days)
     w.background()
     w.plants()
+    w.hand()
     w.write(out)
     return w
 

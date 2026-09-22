@@ -52,9 +52,14 @@ def cmd_about(a: argparse.Namespace) -> int:
 def cmd_scan(a: argparse.Namespace) -> int:
     from isobard.plane import Plane
     p = Plane(Path(a.owner), store=Path(a.store) if a.store else None, reflex=a.reflex, competence=a.competence, seed=a.seed,
-              verdict=not a.no_verdict, bench=not a.no_bench)
-    r = p.run(glass=not a.no_glass)
+              verdict=not a.no_verdict, bench=not a.no_bench, island=(True if a.island else None))
+    r = p.run(glass=not a.no_glass, ticks=a.ticks, tick_hours=a.tick_hours)
     print((p.store / "xray.txt").read_text(encoding="utf-8"))
+    cs = r.get("capture_states", {})
+    if any(cs.values()):
+        print(f"hand: {cs} · grade cases {r.get('grade_cases')} · replies {r['stats']['replies']} (held {r['stats']['replies_held']}) · island {r['island']}")
+    for t in r.get("ticks", []):
+        print(f"tick {t['tick']}: +{t.get('arrived', 0)} mail +{t.get('arrived_hand', 0)} hand · resolved {t['resolved']} · Δv {t['delta_v_norm']:.4f} · stocks {t['stock_prices']}")
     ar, rl = r["arithmetic"], r["roofline"]
     verdict = ("cache-resident lattice (the counted bytes never reach DRAM): the roofline does not apply; the CPU reference is the tier for this owner"
                if rl["regime"] == "cache_resident" else
@@ -63,6 +68,33 @@ def cmd_scan(a: argparse.Namespace) -> int:
           f"{ar.get('bytes', 0) / 1e6:.1f} MB counted · {ar.get('gbs', 0):.1f} GB/s vs measured peak {ar.get('peak_gbs', 0):.1f} GB/s · {verdict}")
     print(f"stocks: {r['field']['stock_prices']} · binding days {r['field']['binding_days']} · embedder {r['embedder']} · reflex {r['reflex']}")
     print(f"tape: {r['tape_rows']} rows · {r['seconds']} s · store {p.store}")
+    return 0
+
+
+def cmd_hand(a: argparse.Namespace) -> int:
+    from isobard.plane import hand_audit
+    ok, rows = hand_audit(Path(a.store), state_budget_s=a.budget)
+    for r in rows:
+        print(f"  {r['capture']:<12} {r['rendering']:<9} {r['state']:<10} receipt {r['receipt']}  {'linked ' + str(r['linked_to'])[-12:] if r['linked_to'] else ''}"
+              f"{'refused ' + str(r['refusal']) if r['refusal'] else ''}  {'ok' if r['ok'] else 'NOT TERMINAL / OVER BUDGET'}")
+    print(f"HAND AUDIT: {len(rows)} captures · {'every capture reached a terminal state within budget' if ok else 'FAILED'}")
+    return 0 if ok else 1
+
+
+def cmd_island(a: argparse.Namespace) -> int:
+    """F-ISLAND's gate: an island-labelled run must carry NETWORK_ABSENT rows, or it was not an island run (the lie arm)."""
+    from isobard.tape import Tape
+    rows = [r for _, r in Tape(Path(a.store)).rows() if r.kind == "island"]
+    codes = {}
+    for r in rows:
+        codes[r.body.get("code", "on")] = codes.get(r.body.get("code", "on"), 0) + 1
+    on = any(r.body.get("on") for r in rows)
+    absent = codes.get("NETWORK_ABSENT", 0) + codes.get("FRONTIER_ABSENT", 0)
+    print(f"island rows: {codes}")
+    if a.verify:
+        ok = on and absent > 0
+        print("ISLAND: verified" if ok else "ISLAND: REFUSED — the run is labelled island but carries no NETWORK_ABSENT/FRONTIER_ABSENT rows (or was never switched on)")
+        return 0 if ok else 1
     return 0
 
 
@@ -121,7 +153,13 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("scan"); s.add_argument("--owner", required=True); s.add_argument("--store"); s.add_argument("--reflex", default="stub")
     s.add_argument("--competence", type=float, default=0.9); s.add_argument("--seed", type=int, default=7)
     s.add_argument("--no-verdict", action="store_true"); s.add_argument("--no-bench", action="store_true"); s.add_argument("--no-glass", action="store_true")
+    s.add_argument("--island", action="store_true", help="run with the cable out: remote lanes refuse NETWORK_ABSENT, effects are held")
+    s.add_argument("--ticks", type=int, default=0, help="advance the clock N times after the scan (the tick path)")
+    s.add_argument("--tick-hours", type=float, default=6.0)
     s.set_defaults(fn=cmd_scan)
+    s = sub.add_parser("hand"); s.add_argument("verb", choices=["audit"]); s.add_argument("--store", required=True); s.add_argument("--budget", type=int, default=3600)
+    s.set_defaults(fn=cmd_hand)
+    s = sub.add_parser("island"); s.add_argument("--store", required=True); s.add_argument("--verify", action="store_true"); s.set_defaults(fn=cmd_island)
     s = sub.add_parser("replay"); s.add_argument("--store", required=True); s.add_argument("--verify", action="store_true"); s.set_defaults(fn=cmd_replay)
     s = sub.add_parser("sweep"); s.add_argument("--owner", required=True); s.add_argument("--competence", default="0.6,0.8,0.96,1.0"); s.add_argument("--seeds", default="7,11,13")
     s.set_defaults(fn=cmd_sweep)

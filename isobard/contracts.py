@@ -1,18 +1,21 @@
-"""The typed objects — the single definition (docs/contracts/objects.md).
+"""The typed objects — the single definition (docs/contracts/objects.md; r0.2 deltas in CHANGES_r0.2.md).
 
 Every handoff between organs is one of these. Field order is normative: it fixes canonical JSON
 and therefore the content address. Times are UTC nanoseconds. Money is minor units + ISO 4217.
 
-Two laws live here as code:
+Laws that live here as code:
   * a probability is a distribution the multiverse samples; nothing in this module compares one
     to a constant (that is the gate's job and only the gate's);
-  * an Effect without an inverse must say "irreversible" — the schema refuses anything else.
+  * an Effect without an inverse must say "irreversible" — the schema refuses anything else;
+  * a hand observation carries two trusts — the envelope's (the owner's act) and the payload's
+    (its origin) — and they are separate fields, compiled separately (L3, L18);
+  * every derived object names what it depends on, so a reinterpretation invalidates a cone and
+    never a rescan (SPEC r0.2 §10.4).
 """
 from __future__ import annotations
 
 import hashlib
 import json
-from enum import Enum
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -43,20 +46,26 @@ class Strict(BaseModel):
 # ----------------------------------------------------------------------------------------------
 # enums (closed vocabularies)
 # ----------------------------------------------------------------------------------------------
-Lane = Literal["mail", "cal", "list", "tick", "compose", "contacts", "money", "location"]
+Lane = Literal["mail", "cal", "list", "hand", "tick", "compose", "contacts", "money", "location"]
 Trust = Literal["operator", "trusted", "untrusted"]
 Provenance = Literal["HIGH", "MOD", "LOW_absent", "LOW_conflict"]
 Kind = Literal["deliverable", "payment", "quote", "response", "appointment", "document", "approval", "purchase", "other"]
-State = Literal["candidate", "active", "waiting", "scheduled", "in_progress", "at_risk", "discharged", "cancelled", "superseded", "contested"]
+State = Literal["candidate", "active", "waiting", "scheduled", "in_progress", "at_risk", "discharged", "cancelled", "superseded", "contested", "unresolved"]
 EffortSource = Literal["explicit", "class_prior", "history", "owner", "model"]
 Verb = Literal["SILENT", "FLAG", "ASK", "DRAFT", "ONE_CLICK", "ACT", "HOLD", "RECHECK"]
 Seat = Literal["FIELD_WATCH", "COMPOSER", "SENTINEL"]
 HoldVerdict = Literal["SILENT", "FLAG", "ASK", "DRAFT", "WAKE", "HOLD", "UNSAY"]
-GradeKind = Literal["sent_as_is", "edited", "discarded", "undone", "ignored", "acted_within", "kept", "slipped", "replied", "silent", "paid", "complaint"]
+GradeKind = Literal["sent_as_is", "edited", "discarded", "undone", "ignored", "acted_within", "kept", "slipped", "replied", "silent", "paid", "complaint", "declared"]
+Stratum = Literal["passive", "declared"]
 ContraKind = Literal["OVERCOMMIT", "DOUBLEBOOK", "DEPENDENCY", "DEADLINE", "DUPLICATE", "TRAVEL", "PAID"]
 Move = Literal["HOLD", "DECLINE", "COUNTER", "MOVE", "PROTECT", "NUDGE", "SPLIT", "DELEGATE", "DEFER", "RENEGOTIATE", "DROP"]
 Relation = Literal["client", "vendor", "partner", "family", "colleague", "agent", "unknown"]
 ConfirmedBy = Literal["owner", "inferred", "verdict"]
+Rendering = Literal["forward", "share", "screenshot", "photo", "voice", "meeting", "drop", "paste", "sms", "list_line"]
+CaptureState = Literal["SEALED", "PARSED", "LINKED", "DUPLICATE", "UNRESOLVED", "REFUSED", "RESOLVED"]
+Refusal = Literal["ASR_FAILED", "OCR_EMPTY", "UNSUPPORTED_MEDIA", "PAYLOAD_TOO_LARGE", "EMPTY"]
+NoteKind = Literal["correction", "policy_hint", "hypothesis", "question", "look_instruction", "none"]
+GradeCase = Literal["seen_dismissed", "unseen", "seen_in_state"]
 
 
 # ----------------------------------------------------------------------------------------------
@@ -75,11 +84,18 @@ class Observation(Strict):
     thread_id: Optional[str] = None
     payload_ref: str                      # blob path or inline: "inline:" + text
     digest: str                           # blake2b-128 of the payload bytes
-    intake_trust: Trust = "untrusted"
+    intake_trust: Trust = "untrusted"     # the PAYLOAD's trust, from its origin
+    envelope_trust: Trust = "untrusted"   # the ACT's trust: operator on the hand lane, never lowered by the payload
+    declared: bool = False                # the hand's implicit imperative: ingest, integrate, recompute
+    rendering: Optional[Rendering] = None
+    note: Optional[str] = None            # the owner's words above a forward or before a recording: TESTIMONY
+    telemetry: Optional[dict[str, Any]] = None
     injection_shape: bool = False
 
     def with_id(self) -> "Observation":
-        self.id = content_id(self)
+        # the receipt time and the derived injection flag are late-bound: the same external item admitted on a
+        # later tick MUST get the same id, or every tick re-admits the world (found the first time ticks ran)
+        self.id = content_id(self, exclude={"ingested_ns", "injection_shape"})
         return self
 
 
@@ -96,8 +112,10 @@ class Cell(Strict):
     provider: str
     provider_fp: str
     questions_version: int
+    question_set: str = "mail"
     fields: dict[str, CellField]
     latency_us: int = 0
+    depends_on: list[str] = Field(default_factory=list)
 
     def with_id(self) -> "Cell":
         self.id = content_id(self, exclude={"latency_us"})
@@ -115,6 +133,7 @@ class Join(Strict):
     candidates: list[JoinCandidate] = Field(default_factory=list)
     method: Literal["exact", "lexical", "embed_rerank_reflex", "none"] = "none"
     exact_key: Optional[str] = None
+    depends_on: list[str] = Field(default_factory=list)
 
 
 class Due(Strict):
@@ -157,6 +176,8 @@ class Commitment(Strict):
     p_promoted: float = Field(default=0.0, ge=0.0, le=1.0)
     state_version: int = 0
     thread_id: Optional[str] = None
+    depends_on: list[str] = Field(default_factory=list)
+    capture_id: Optional[str] = None      # set when the row IS an unresolved capture
 
 
 class Contra(Strict):
@@ -193,6 +214,7 @@ class Field_(Strict):
     arithmetic: Optional[Arithmetic] = None
     iters: int = 0
     arm: int = 0
+    depends_on: list[str] = Field(default_factory=list)
 
 
 class Hold(Strict):
@@ -233,6 +255,7 @@ class Effect(Strict):
     idempotency_key: str
     hold_window_s: int = 0
     state: Literal["planned", "held", "fired", "verified", "failed", "unknown", "unwound"] = "planned"
+    held_reason: Optional[str] = None     # e.g. NETWORK_ABSENT on the island
 
     @field_validator("inverse")
     @classmethod
@@ -255,12 +278,73 @@ class Wager(Strict):
 
 
 class Grade(Strict):
-    subject: Literal["effect", "wake", "draft", "wager", "move"]
+    subject: Literal["effect", "wake", "draft", "wager", "move", "cell", "commitment"]
     subject_id: str
     kind: GradeKind
+    stratum: Stratum = "passive"          # declared grades never widen a licence; passive ones may
     diff: Optional[str] = None
     t_delta_s: Optional[int] = None
     salted: bool = False
+    ns: int
+    case: Optional[GradeCase] = None      # for declared grades: which of the three hand cases
+
+
+# ----------------------------------------------------------------------------------------------
+# the hand lane (SPEC r0.2 §5)
+# ----------------------------------------------------------------------------------------------
+class Capture(Strict):
+    """One hand event and the state it reached. Every capture ends in a terminal state or the audit names it."""
+    id: str                               # = the observation id
+    rendering: Rendering
+    state: CaptureState
+    sealed_ns: int
+    receipt: str                          # the first eight hex of the sealing row's hash
+    refusal: Optional[Refusal] = None
+    linked_to: Optional[str] = None       # commitment id on LINKED / RESOLVED
+    duplicate_of: Optional[str] = None    # observation id on DUPLICATE
+    resolved_ns: Optional[int] = None
+    join_method: Optional[str] = None
+    note_kind: NoteKind = "none"
+    grade_case: Optional[GradeCase] = None
+    unresolved_row: Optional[str] = None  # the commitment id of the row carried in the UNRESOLVED stock
+    keys: dict[str, str] = Field(default_factory=dict)   # forward_key, quoted_digest, original_mid, ids found
+
+
+class HandReply(Strict):
+    """The typed reply the address sends back. Never prose beyond these lines."""
+    capture_id: str
+    sealed: str
+    moved: Optional[str] = None
+    linked: Optional[str] = None
+    unresolved: bool = False
+    duplicate_of: Optional[str] = None
+    ask: Optional[str] = None
+    refused: Optional[str] = None
+    held: Optional[str] = None            # NETWORK_ABSENT: the reply is queued, not sent
+
+    def render(self) -> str:
+        lines = [f"sealed   {self.sealed}"]
+        if self.moved:
+            lines.append(f"moved    {self.moved}")
+        if self.linked:
+            lines.append(f"linked   {self.linked}")
+        elif self.duplicate_of:
+            lines.append(f"linked   duplicate of {self.duplicate_of}")
+        elif self.unresolved:
+            lines.append("linked   unresolved (re-asked each tick)")
+        lines.append(f"ask?     {self.ask or 'none'}")
+        if self.refused:
+            lines.append(f"refused  {self.refused} (payload sealed; try again or type it)")
+        if self.held:
+            lines.append(f"held     {self.held}")
+        return "\n".join(lines)
+
+
+class CoverageGap(Strict):
+    """A hand event the plane had no way to see: names the channel it lacks."""
+    capture_id: str
+    channel: str                          # e.g. "domain:portal.example" | "app:whatsapp" | "modality:voice"
+    sender: Optional[str] = None
     ns: int
 
 
@@ -268,7 +352,7 @@ class Grade(Strict):
 # registries (docs/contracts/registry.md)
 # ----------------------------------------------------------------------------------------------
 class Identity(Strict):
-    kind: Literal["email", "phone", "handle", "external_id"]
+    kind: Literal["email", "phone", "handle", "external_id", "voice"]
     value: str
     source: str = ""
     first_seen_ns: int = 0
@@ -319,7 +403,7 @@ class Place(Strict):
     lon: Optional[float] = None
     radius_m: Optional[int] = None
     address: Optional[str] = None
-    role: Literal["home", "work", "client", "vendor", "site", "frequent", "sensitive"] = "frequent"
+    role: Literal["home", "work", "client", "vendor", "site", "frequent", "sensitive", "transit"] = "frequent"
     actors: list[str] = Field(default_factory=list)
     travel_edges: list[TravelEdge] = Field(default_factory=list)
     confirmed_by: ConfirmedBy = "inferred"
@@ -347,7 +431,8 @@ class MoneyObject(Strict):
 # the scan's finding (the X-ray's row)
 # ----------------------------------------------------------------------------------------------
 FindingType = Literal["SILENT_QUOTE", "SILENT_PROPOSAL", "APPARENT_OVERDUE_INVOICE", "CUSTOMER_WAITING",
-                      "WE_ARE_WAITING", "PROMISE_PAST_DUE", "UNRESOLVED_REQUEST", "MISSING_RESPONSE", "DUPLICATE"]
+                      "WE_ARE_WAITING", "PROMISE_PAST_DUE", "UNRESOLVED_REQUEST", "MISSING_RESPONSE", "DUPLICATE",
+                      "UNRESOLVED_CAPTURE"]
 
 
 class Finding(Strict):
@@ -363,10 +448,11 @@ class Finding(Strict):
     days_silent: Optional[float] = None
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: list[str] = Field(default_factory=list)
-    recommendation: Literal["FOLLOW_UP", "REPLY", "DO", "REVIEW", "MERGE", "NONE"] = "REVIEW"
+    recommendation: Literal["FOLLOW_UP", "REPLY", "DO", "REVIEW", "MERGE", "NONE", "RESOLVE"] = "REVIEW"
     why: dict[str, Any] = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
 
 
 ALL_MODELS = [Observation, CellField, Cell, JoinCandidate, Join, Due, Effort, Commitment, Contra, Arithmetic,
-              Field_, Hold, Verdict, Effect, Wager, Grade, Identity, ReplyLatency, ActorStats, Actor,
-              TravelEdge, Place, MoneyObject, Finding]
+              Field_, Hold, Verdict, Effect, Wager, Grade, Capture, HandReply, CoverageGap, Identity, ReplyLatency,
+              ActorStats, Actor, TravelEdge, Place, MoneyObject, Finding]

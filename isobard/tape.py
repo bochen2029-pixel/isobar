@@ -26,6 +26,8 @@ KINDS = frozenset({
     "observation", "cell", "join", "promotion", "field", "foresight", "hold", "switch", "verdict",
     "intent", "effect", "receipt", "wager", "grade", "calibration", "licence", "policy", "correction",
     "registry", "tick", "coalesce", "finding", "run",
+    # r0.2 (SPEC §18.2): the hand lane, recontextualisation, the island
+    "capture", "resolution", "coverage", "island",
 })
 GENESIS = "0" * 32
 
