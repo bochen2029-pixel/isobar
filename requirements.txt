@@ -1,0 +1,5 @@
+pydantic>=2.6
+numpy>=1.26
+PyYAML>=6.0
+pytest>=8.0
+# optional, the open reflex backend (weights download on first Router use):  laya>=0.3.5

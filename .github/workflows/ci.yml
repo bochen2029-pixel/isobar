@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  battery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: build the CPU reference (any C++17 compiler; no CUDA toolkit needed)
+        run: |
+          mkdir -p solver/build
+          g++ -O2 -std=c++17 -x c++ -DISOBAR_CPU -o solver/build/isobar_field_wsl solver/isobar_field.cu
+      - name: the instrument's oracles, and one lie arm that must fail its oracle
+        run: |
+          ./solver/build/isobar_field_wsl --selftest
+          ./solver/build/isobar_field_wsl --selftest --lie 3 | grep -E "FAILED \(correct\)"
+      - name: python deps
+        run: pip install -r requirements.txt
+      - name: the battery
+        run: python -m pytest tests/ -q
+      - name: the X-ray on the gym, and the replay
+        run: |
+          python -m isobard.cli gym --out runs/gym/ci --seed 7
+          python -m isobard.cli scan --owner runs/gym/ci --competence 1.0 --no-bench
+          python -m isobard.cli replay --store runs/gym/ci/store --verify
+      - name: keep the receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray
+          path: |
+            runs/gym/ci/store/xray.txt
+            runs/gym/ci/store/receipt.json
+            runs/gym/ci/store/glass.html
