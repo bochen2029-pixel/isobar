@@ -745,7 +745,7 @@ class Plane:
     def run_scan(self) -> list[Finding]:
         open_ids = [c.id for c in self.open_rows() if c.state != "unresolved"]
         entity_of = {c.id: (c.creditor_actor if c.debtor_actor == self.owner.id else c.debtor_actor) for c in self.open_rows()}
-        dups = self.joiner.duplicates(open_ids, entity_of, floor=0.75)   # the trough is measured on real data (B10); 0.75 is a placeholder above the gym's noise
+        dups = self.joiner.duplicates(open_ids, entity_of, floor=self.embedder.dup_floor)   # per embedder; the trough is measured on real data (B19)
         findings = recovery_scan(self.now_ns, self.commitments, self.money.by_id, self.people.by_id, self.owner.id,
                                  self.last_owner, self.last_counter, self.notes, dups)
         for cap in self.captures.values():
@@ -781,7 +781,7 @@ class Plane:
         arith = d.get("arithmetic", {})
         working_set = int(d["N"] * (32 + 128 + 4) + d["M"] * 8 + (128 + 4))
         return {
-            "owner": self.owner_email, "now": now_label, "reflex": self.provider.provider_fp, "embedder": self.embedder.kind,
+            "owner": self.owner_email, "now": now_label, "reflex": self.provider.provider_fp, "embedder": self.embedder.kind, "dup_floor": self.embedder.dup_floor,
             "verdict_connected": self.verdict, "island": self.island, "stats": self.stats, "open_rows": len(rows), "commitments": len(self.commitments),
             "actors": len(self.people.by_id), "money_objects": len(self.money.by_id), "findings": len(findings),
             "finding_types": {t: sum(1 for f in findings if f.finding_type == t) for t in sorted({f.finding_type for f in findings})},

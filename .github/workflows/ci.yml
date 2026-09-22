@@ -24,8 +24,8 @@ jobs:
           ./solver/build/isobar_field_wsl --selftest --lie 4 | grep -E "FAILED \(correct\)"
       - name: python deps
         run: pip install -r requirements.txt
-      - name: the battery
-        run: python -m pytest tests/ -q
+      - name: the battery (the runner has no embedding server; the hashed fallback is a named arm, forced explicitly)
+        run: ISOBAR_EMBED=hash python -m pytest tests/ -q
       - name: the X-ray on the gym, the island with ticks, the hand audit, and the replay
         run: |
           python -m isobard.cli gym --out runs/gym/ci --seed 7

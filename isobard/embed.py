@@ -54,10 +54,17 @@ class Embedder:
             out[i] /= n
         return out
 
+    @property
+    def dup_floor(self) -> float:
+        """The unkeyed-duplicate cosine floor is a property of the embedding model, never inherited across models:
+        bag-of-words cosines run lower than a trained embedder's. Placeholders until the trough is measured (B19)."""
+        return 0.55 if self.kind == "hash-fallback" else 0.75
+
     def embed(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, 1024), dtype=np.float32)
-        vecs = self._remote(texts)
+        import os
+        vecs = None if os.environ.get("ISOBAR_EMBED", "").lower() == "hash" else self._remote(texts)
         if vecs is None:
             vecs = self._hash(texts)
             self.kind = "hash-fallback"
