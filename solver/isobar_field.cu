@@ -99,6 +99,19 @@
 #include <algorithm>
 
 // ----------------------------------------------------------------------------
+// ISOBAR (2026-09-22): this file is the LIFT of ledger_lattice.cu (sha256 5a0d6edc…c4c53), re-shaped
+// for one owner's horizon. Every ISOBAR edit is marked "ISOBAR" and recorded in docs/devlog.md with
+// the line it touched. Added: the WAITING stock (the price of a counterparty's silence); tier_w
+// (the people registry's weight on lateness); paid/waiting rows; K_PAID + oracle O8 with its lie;
+// host_view() so the selftest's host-side traversals never dereference device pointers (the GPU
+// selftest segfaulted in the original — a latent defect the lift found); a peak-bandwidth buffer
+// larger than L2; and the --tick binary IPC that isobard drives. -DISOBAR_CPU == -DLL_CPU.
+// ----------------------------------------------------------------------------
+#if defined(ISOBAR_CPU) && !defined(LL_CPU)
+#define LL_CPU 1
+#endif
+
+// ----------------------------------------------------------------------------
 // 0 · SUBSTRATE — the same kernels run serially under -DLL_CPU
 // ----------------------------------------------------------------------------
 #ifdef LL_CPU
@@ -214,6 +227,10 @@ struct Lat {
   const int*      dep;
   const int*      inc_cell;
   const unsigned int* flags;
+  // --- ISOBAR rows: the registries, read as numbers
+  const float*         tier_w;   // [N] the people registry's multiplier on lateness (1.0 = no registry)
+  const unsigned char* paid;     // [N] 1 = the money VERDICT says paid — K_PAID: never in a chase set
+  const unsigned char* waiting;  // [N] 1 = blocked on a counterparty — lives ONLY in the WAITING stock
   // --- embeddings: int8 storage, fp32 compute (T2)
   const signed char* emb;      // [N * EMB_D]
   const float*       emb_scale;// [N]
@@ -228,7 +245,8 @@ struct Lat {
   int arm;                      // 0 = incumbent (true law), 1 = solver (effective law)
 };
 
-enum { STOCK_UNPLACED = 0, STOCK_UNADJUDICATED = 1, N_STOCK = 2 };
+// ISOBAR: a third stock. WAITING = with a counterparty; its dual is the price of their silence.
+enum { STOCK_UNPLACED = 0, STOCK_UNADJUDICATED = 1, STOCK_WAITING = 2, N_STOCK = 3 };
 
 __host__ __device__ __forceinline__ int  col_seat(const Lat& L, int c){ return c / L.nslot; }
 __host__ __device__ __forceinline__ int  col_slot(const Lat& L, int c){ return c % L.nslot; }
@@ -262,8 +280,15 @@ float place_cost(const Lat& L, int i, int c)
     // dual. THE T17 FIX. Unplaced work costs its carrying cost; unadjudicated
     // work costs the escalation cost. Neither is free and neither is infinite.
     const int s = stock_id(L, c);
+    // ISOBAR: a waiting row sits in the WAITING stock (cheap, budgeted) or spills to UNPLACED (dear):
+    // when the silence budget binds, the overflow prices WAITING and conservation still holds.
+    // A placeable row may never sit in WAITING.
+    const bool w = (L.waiting != nullptr) && L.waiting[i];
+    if (w) return (s == STOCK_WAITING) ? (-1.0f / L.T) : (s == STOCK_UNPLACED) ? (-3.0f / L.T) : NEG_INF;
+    if (s == STOCK_WAITING) return NEG_INF;
     return (s == STOCK_UNPLACED) ? (-3.0f / L.T) : (-2.0f / L.T);
   }
+  if ((L.waiting != nullptr) && L.waiting[i]) return NEG_INF;   // ISOBAR: no lawful real cell while waiting
   const int seat = col_seat(L, c);
   const int slot = col_slot(L, c);
 
@@ -288,9 +313,16 @@ float place_cost(const Lat& L, int i, int c)
   // --- lateness has a price, which is what a queue rule cannot give you
   const int finish = slot + (int)L.dur[i];
   const float late = (float)(finish > L.t_due[i] ? finish - L.t_due[i] : 0);
+  const float tw   = (L.tier_w != nullptr) ? L.tier_w[i] : 1.0f;   // ISOBAR: the registry weights lateness
 
-  return (compat - L.late_penalty * late) / L.T;
+  return (compat - L.late_penalty * tw * late) / L.T;
 }
+
+// ISOBAR: a host-side view of the lattice. The selftest's O1/O3 traversals call place_cost() on
+// the host; with device pointers that dereferences cudaMalloc memory and segfaults (the original's
+// GPU selftest did exactly that). Every host traversal reads THIS view, never Dev.L.
+struct LatHost;
+static Lat host_view(const LatHost& H);
 
 // numerically-safe log-sum-exp over a strided run, masked entries skipped
 __host__ __device__ __forceinline__
@@ -424,7 +456,9 @@ __global__ void k_support(Lat L, const float* u, const float* v,
 //                 only kind that can be WRONG, so it is reported separately and
 //                 carries a confidence, never folded into the keyed count.
 // ----------------------------------------------------------------------------
-enum { K_OVERCOMMIT=0, K_DOUBLEBOOK=1, K_DEPENDENCY=2, K_DEADLINE=3, K_DUPLICATE=4, K_N=5 };
+// ISOBAR: K_PAID — the money verdict says PAID, yet the object is still open in the lattice. It can
+// never be in a chase set; the plane must discharge it. Keyed on the verdict flag; self-certifying.
+enum { K_OVERCOMMIT=0, K_DOUBLEBOOK=1, K_DEPENDENCY=2, K_DEADLINE=3, K_DUPLICATE=4, K_PAID=5, K_N=6 };
 
 struct Contra { int a, b, kind; float weight; };
 
@@ -465,6 +499,13 @@ __global__ void k_contra(Lat L, const int* cell_start, const int* cell_count,
 
   for (int k = 0; k < n; ++k) {
     const int i = cell_items[base + k];
+
+    // ISOBAR K_PAID — paid by the verdict source, still open: a contradiction the plane must resolve
+    if ((L.paid != nullptr) && L.paid[i]) {
+      const int idx = atomicAdd(n_out, 1);
+      if (idx < (int)MAX_CONTRA) out[idx] = Contra{ i, -1, K_PAID, 1.f + price };
+      atomicAdd(&by_kind[K_PAID], 1ull);
+    }
 
     // K_DEADLINE — finishes after it was promised
     if (!col_is_stock(L, c)) {
@@ -578,10 +619,28 @@ struct LatHost {
   std::vector<unsigned int> flags, law, arm_mask;
   std::vector<signed char> emb, seat_key;
   std::vector<float> emb_scale, seat_scale;
+  // ISOBAR rows
+  std::vector<float> tier_w;
+  std::vector<unsigned char> paid, waiting;
   // planted truth (synthetic only) — what the oracles must recover
   std::vector<int> planted_dup_a, planted_dup_b;
   int planted_overcommit = 0, planted_deadline = 0, planted_dep = 0;
+  int planted_paid = 0, planted_waiting = 0;   // ISOBAR
 };
+
+static Lat host_view(const LatHost& H){
+  Lat L{};
+  L.N=H.N; L.nseat=H.nseat; L.nslot=H.nslot; L.M=H.M; L.ncls=H.ncls; L.T=H.T; L.late_penalty=H.late_penalty;
+  L.entity=H.entity.data(); L.cls=H.cls.data(); L.dur=H.dur.data(); L.src=H.src.data();
+  L.t_open=H.t_open.data(); L.t_due=H.t_due.data(); L.work=H.work.data(); L.dep=H.dep.data(); L.inc_cell=H.inc_cell.data();
+  L.flags=H.flags.data(); L.emb=H.emb.data(); L.emb_scale=H.emb_scale.data();
+  L.seat_key=H.seat_key.data(); L.seat_scale=H.seat_scale.data();
+  L.cap=H.cap.data(); L.supply=H.supply.data(); L.law=H.law.data(); L.arm_mask=H.arm_mask.data(); L.arm=0;
+  L.tier_w = H.tier_w.empty() ? nullptr : H.tier_w.data();
+  L.paid = H.paid.empty() ? nullptr : H.paid.data();
+  L.waiting = H.waiting.empty() ? nullptr : H.waiting.data();
+  return L;
+}
 
 static void quantize(const std::vector<float>& f, signed char* q, float& scale){
   float mx = 1e-9f;
@@ -634,6 +693,15 @@ static LatHost build_synthetic(int N, int nseat, int nslot, int ncls,
     quantize(f, &H.emb[(size_t)i*EMB_D], H.emb_scale[i]);
     if (u01(seed, 18, i) < 0.20f && i > 0) H.dep[i] = (int)(u01(seed, 19, i) * i);
   }
+  // ISOBAR: registry rows. tier_w from a planted tier (1..4); 10% of rows WAITING on a counterparty;
+  // 2% planted PAID-but-open so oracle O8 has something to recover.
+  H.tier_w.assign(N, 1.f); H.paid.assign(N, 0); H.waiting.assign(N, 0);
+  for (int i = 0; i < N; ++i) {
+    const int tier = 1 + (int)(u01(seed, 73, i) * 4);
+    H.tier_w[i] = (tier == 1) ? 2.0f : (tier == 2) ? 1.4f : (tier == 3) ? 1.0f : 0.5f;
+    if (u01(seed, 71, i) < 0.10f) { H.waiting[i] = 1; H.planted_waiting++; }
+    if (u01(seed, 72, i) < 0.02f) { H.paid[i] = 1;    H.planted_paid++; }
+  }
 
   // PLANT: n_dup duplicate pairs — the same promise recorded in two systems,
   // with no shared key and only the embedding to join them.
@@ -673,10 +741,13 @@ static LatHost build_synthetic(int N, int nseat, int nslot, int ncls,
   for (int c = 0; c < nseat*nslot; ++c) H.cap[c] = std::max(0.5f, per_cell);
   H.cap[nseat*nslot + STOCK_UNPLACED]      = (float)(total_work * 0.25);  // carrying capacity
   H.cap[nseat*nslot + STOCK_UNADJUDICATED] = (float)(total_work * 0.05);  // adjudication bandwidth
+  { double wm = 0; for (int i = 0; i < N; ++i) if (H.waiting[i]) wm += H.work[i];        // ISOBAR: the silence budget
+    H.cap[nseat*nslot + STOCK_WAITING] = (float)std::max(0.5, wm * 0.5); }               // planted to BIND, so O8b prices it
 
   // THE INCUMBENT'S OWN ASSIGNMENT (what the CDC stream says actually happened),
   // with contradictions planted into it on purpose.
   for (int i = 0; i < N; ++i) {
+    if (H.waiting[i]) { H.inc_cell[i] = nseat*nslot + STOCK_WAITING; continue; }   // ISOBAR: waiting rows sit in their stock
     const int seat = (int)(u01(seed, 51, i) * nseat);
     int slot = H.t_open[i] + (int)(u01(seed, 52, i) * 3);
     if (slot + (int)H.dur[i] > nslot) slot = std::max(0, nslot - (int)H.dur[i]);
@@ -727,6 +798,7 @@ static bool ingest_csv(LatHost& H, const char* path, int nseat, int nslot, int n
     H.work.push_back(wk); H.supply.push_back(wk); H.dep.push_back(dp);
     H.inc_cell.push_back((isea >= 0 && islo >= 0) ? isea*nslot + islo : -1);
     H.flags.push_back(0u);
+    H.tier_w.push_back(1.f); H.paid.push_back(0); H.waiting.push_back(0);   // ISOBAR: no registry on a CDC stream
     H.emb.resize((size_t)(n+1)*EMB_D); H.emb_scale.resize(n+1);
     quantize(e, &H.emb[(size_t)n*EMB_D], H.emb_scale[n]);
     ++n;
@@ -740,6 +812,7 @@ static bool ingest_csv(LatHost& H, const char* path, int nseat, int nslot, int n
   H.cap.assign(H.M, (float)(tw / std::max(1, nseat*nslot) * 1.35));
   H.cap[nseat*nslot + STOCK_UNPLACED]      = (float)(tw * 0.25);
   H.cap[nseat*nslot + STOCK_UNADJUDICATED] = (float)(tw * 0.05);
+  H.cap[nseat*nslot + STOCK_WAITING]       = (float)(tw * 0.30);   // ISOBAR
   printf("cdc: ingested %d commitments from %s\n", n, path);
   return n > 0;
 }
@@ -753,6 +826,7 @@ struct Dev {
   float *work=nullptr,*cap=nullptr,*supply=nullptr,*emb_scale=nullptr,*seat_scale=nullptr;
   unsigned int *flags=nullptr,*law=nullptr,*arm_mask=nullptr;
   signed char *emb=nullptr,*seat_key=nullptr;
+  float* tier_w=nullptr; unsigned char *paid=nullptr,*waiting=nullptr;   // ISOBAR
   Lat L{};
 };
 
@@ -771,7 +845,12 @@ static Dev upload(const LatHost& H){
   d.flags=up_u(H.flags); d.law=up_u(H.law); d.arm_mask=up_u(H.arm_mask);
   d.emb=dev_alloc<signed char>(H.emb.size()); dev_upload(d.emb,H.emb.data(),H.emb.size());
   d.seat_key=dev_alloc<signed char>(H.seat_key.size()); dev_upload(d.seat_key,H.seat_key.data(),H.seat_key.size());
+  // ISOBAR rows (absent on a bare CDC lattice ⇒ null pointers ⇒ the kernels treat them as neutral)
+  if (!H.tier_w.empty())  { d.tier_w=up_f(H.tier_w); }
+  if (!H.paid.empty())    { d.paid=dev_alloc<unsigned char>(H.paid.size()); dev_upload(d.paid,H.paid.data(),H.paid.size()); }
+  if (!H.waiting.empty()) { d.waiting=dev_alloc<unsigned char>(H.waiting.size()); dev_upload(d.waiting,H.waiting.data(),H.waiting.size()); }
   Lat& L = d.L;
+  L.tier_w=d.tier_w; L.paid=d.paid; L.waiting=d.waiting;
   L.N=H.N; L.nseat=H.nseat; L.nslot=H.nslot; L.M=H.M; L.ncls=H.ncls;
   L.T=H.T; L.late_penalty=H.late_penalty;
   L.entity=d.entity; L.cls=d.cls; L.dur=d.dur; L.src=d.src;
@@ -786,6 +865,7 @@ static void release(Dev& d){
   dev_free(d.cls); dev_free(d.dur); dev_free(d.src);
   dev_free(d.work); dev_free(d.cap); dev_free(d.supply); dev_free(d.emb_scale); dev_free(d.seat_scale);
   dev_free(d.flags); dev_free(d.law); dev_free(d.arm_mask); dev_free(d.emb); dev_free(d.seat_key);
+  dev_free(d.tier_w); dev_free(d.paid); dev_free(d.waiting);   // ISOBAR
 }
 
 // ----------------------------------------------------------------------------
@@ -926,6 +1006,9 @@ __global__ void k_stream(const float* a, const float* b, float* c, long long n, 
   const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) c[i] = a[i] + s * b[i];
 }
+// ISOBAR correction (2026-09-22): the original measured 1<<22 floats × 3 arrays = 48 MB, which is
+// exactly the L2 of the AD103 on this box — the "peak" it printed (1,592 GB/s) was an L2 number,
+// 2.4× the card's DRAM. The triad now streams 128 MB per array so the number is DRAM bandwidth.
 static double measure_peak_gbs(long long n_elem){
   float* a = dev_alloc<float>(n_elem);
   float* b = dev_alloc<float>(n_elem);
@@ -950,7 +1033,8 @@ static const char* KIND_NAME[K_N] = {
   "DOUBLEBOOK  one entity, two places, same slot",
   "DEPENDENCY  starts before its predecessor finishes",
   "DEADLINE    finishes after it was promised",
-  "DUPLICATE   same promise in two systems (UNKEYED - model judgment)"
+  "DUPLICATE   same promise in two systems (UNKEYED - model judgment)",
+  "PAID        the verdict says PAID yet the object is open (never chase it)"   // ISOBAR
 };
 
 static void byte_report(const LatHost& H){
@@ -989,9 +1073,11 @@ static void report(const LatHost& H, const TickOut& R, double peak_gbs, int tick
            seat_price[k].first > 1e-6f ? "<-- binding" : "");
   const float p_unp = -R.v[nseat*nslot + STOCK_UNPLACED];
   const float p_una = -R.v[nseat*nslot + STOCK_UNADJUDICATED];
+  const float p_wai = -R.v[nseat*nslot + STOCK_WAITING];
   printf("  stock UNPLACED         %10.4f\n", p_unp > 0 ? p_unp : 0.f);
   printf("  stock UNADJUDICATED    %10.4f%s\n", p_una > 0 ? p_una : 0.f,
          (p_unp == 0.f && p_una == 0.f) ? "   [!] both stock duals zero - check the T17 fix" : "");
+  printf("  stock WAITING          %10.4f   (the price of counterparties' silence)\n", p_wai > 0 ? p_wai : 0.f);
 
   // ---------------- 2 · THE SUPPORT SPECTRUM ----------------
   printf("\n=== 2 · THE SUPPORT SPECTRUM  exp(H) per commitment ===\n");
@@ -1086,6 +1172,7 @@ static int selftest(uint64_t seed, int lie)
   }
 
   // ---- O1 one dynamics source: two independent traversals must agree exactly
+  const Lat Lh = host_view(H);   // ISOBAR: host traversals read the host view, never device pointers
   {
     TickOut R = run_tick(D, H, 24, 0.97f, 64);
     double worst = 0; int worst_i = -1;
@@ -1093,7 +1180,7 @@ static int selftest(uint64_t seed, int lie)
       if (IS_MASKED(R.u[i])) continue;
       // path A: recompute the row normalizer from place_cost
       float mx, s; lse_init(mx, s);
-      for (int c = 0; c < H.M; ++c) lse_push(mx, s, place_cost(D.L, i, c) + R.v[c]);
+      for (int c = 0; c < H.M; ++c) lse_push(mx, s, place_cost(Lh, i, c) + R.v[c]);
       const double zA = lse_done(mx, s);
       // path B: the dual identity  u_i = log a_i - z  =>  z = log a_i - u_i
       const double zB = log(std::max(H.supply[i], 1e-9f)) - R.u[i];
@@ -1136,7 +1223,7 @@ static int selftest(uint64_t seed, int lie)
       if (IS_MASKED(R.u[i])) continue;
       double rs = 0;
       for (int c = 0; c < H.M; ++c) {
-        const float lc = place_cost(D.L, i, c);
+        const float lc = place_cost(Lh, i, c);   // ISOBAR: host view
         if (IS_MASKED(lc)) continue;
         const double p = exp((double)lc + R.u[i] + R.v[c]);
         rs += p; colmass[c] += p;
@@ -1181,6 +1268,19 @@ static int selftest(uint64_t seed, int lie)
     check(planted == 0 || hit >= (planted*7)/10, "O6 unkeyed duplicate recall (>=70%)", buf);
   }
 
+  // ---- O8 ISOBAR K_PAID: every planted paid-but-open row is a contradiction, and nothing else is
+  {
+    TickOut R = run_tick(D, H, 24, 0.97f, 64);
+    int hit = 0, extra = 0;
+    for (const Contra& c : R.contra) if (c.kind == K_PAID) { if (H.paid[c.a]) ++hit; else ++extra; }
+    snprintf(buf, sizeof buf, "K_PAID fired on %d/%d planted, %d extras (gate: all, none)", hit, H.planted_paid, extra);
+    check(hit == H.planted_paid && extra == 0, "O8 K_PAID (paid-by-verdict never chased)", buf);
+    // and the waiting rows sit in their stock, whose dual is nonzero under the planted load
+    const float pw = -R.v[H.nseat*H.nslot + STOCK_WAITING];
+    snprintf(buf, sizeof buf, "%d waiting rows; WAITING price %.4f (must be > 0)", H.planted_waiting, pw);
+    check(H.planted_waiting == 0 || pw > 1e-6f, "O8b the WAITING stock is priced", buf);
+  }
+
   // ---- THE LIE: run one oracle against a deliberately broken lattice.
   if (lie > 0) {
     printf("\n--- lie arm %d: the oracle must FAIL, or the oracle is broken ---\n", lie);
@@ -1208,6 +1308,15 @@ static int selftest(uint64_t seed, int lie)
       printf("    O6 under the lie: recovered %d/%d -> %s\n", hit, (int)B.planted_dup_a.size(),
              caught ? "FAILED (correct)" : "PASSED (BROKEN ORACLE)");
       release(DB);
+    } else if (lie == 3) {                // ISOBAR: drop the verdict column — K_PAID must go blind and O8 must FAIL
+      std::fill(B.paid.begin(), B.paid.end(), (unsigned char)0);
+      Dev DB = upload(B);
+      TickOut R = run_tick(DB, B, 24, 0.97f, 64);
+      int hit = 0; for (const Contra& c : R.contra) if (c.kind == K_PAID) ++hit;
+      caught = (hit != H.planted_paid);   // the oracle compares against the ORIGINAL planted count
+      printf("    O8 under the lie: K_PAID fired %d vs %d planted -> %s\n", hit, H.planted_paid,
+             caught ? "FAILED (correct)" : "PASSED (BROKEN ORACLE)");
+      release(DB);
     }
     if (!caught) { ++lie_missed; }
   }
@@ -1219,7 +1328,109 @@ static int selftest(uint64_t seed, int lie)
 }
 
 // ----------------------------------------------------------------------------
-// 13 · MAIN
+// 13 · ISOBAR IPC — `--tick lattice.bin [--prev field.bin] [--out field]`
+//
+// isobard writes lattice.bin (a 64-byte header, then SoA arrays in the order below, little-endian,
+// no padding); this instrument runs ONE tick (both arms) and writes <out>.json (the Field the plane
+// folds onto the tape) and <out>.bin (the duals, for the next tick's Δv). No JSON is parsed here.
+//
+//   header: "ISOB" u32 version=1 | i32 N nseat nslot ncls | f32 T late_penalty | i32 iters arm |
+//           u64 seed | f32 dup_cos | i32 emb_d(=EMB_D) | pad to 64
+//   arrays: i32 entity[N] i16 cls[N] u8 dur[N] u8 src[N] i32 t_open[N] i32 t_due[N] f32 work[N]
+//           i32 dep[N] i32 inc_cell[N] u32 flags[N] f32 tier_w[N] u8 paid[N] u8 waiting[N]
+//           i8 emb[N*EMB_D] f32 emb_scale[N] i8 seat_key[nseat*EMB_D] f32 seat_scale[nseat]
+//           f32 cap[M] f32 supply[N] u32 law[lawwords] u32 arm_mask[armwords]
+// ----------------------------------------------------------------------------
+#pragma pack(push, 1)
+struct IsobHeader { char magic[4]; uint32_t version; int32_t N, nseat, nslot, ncls; float T, late_penalty;
+                    int32_t iters, arm; uint64_t seed; float dup_cos; int32_t emb_d; unsigned char pad[8]; };
+#pragma pack(pop)
+static_assert(sizeof(IsobHeader) == 64, "IsobHeader must be 64 bytes");
+
+template <class T> static bool rd(FILE* f, std::vector<T>& v, size_t n){ v.resize(n); return n == 0 || fread(v.data(), sizeof(T), n, f) == n; }
+
+static bool load_lattice_bin(const char* path, LatHost& H, IsobHeader& hd){
+  FILE* f = fopen(path, "rb");
+  if (!f) { fprintf(stderr, "cannot open %s\n", path); return false; }
+  if (fread(&hd, sizeof hd, 1, f) != 1 || memcmp(hd.magic, "ISOB", 4) != 0 || hd.version != 1 || hd.emb_d != EMB_D) {
+    fprintf(stderr, "bad lattice header (magic/version/emb_d)\n"); fclose(f); return false; }
+  const int N = hd.N, nseat = hd.nseat, nslot = hd.nslot;
+  H.N=N; H.nseat=nseat; H.nslot=nslot; H.ncls=hd.ncls; H.M = nseat*nslot + N_STOCK; H.T=hd.T; H.late_penalty=hd.late_penalty;
+  const size_t lawwords = ((size_t)hd.ncls*nseat + 31)/32, armwords = ((size_t)nseat + 31)/32;
+  bool ok = rd(f,H.entity,N) && rd(f,H.cls,N) && rd(f,H.dur,N) && rd(f,H.src,N) && rd(f,H.t_open,N) && rd(f,H.t_due,N)
+         && rd(f,H.work,N) && rd(f,H.dep,N) && rd(f,H.inc_cell,N) && rd(f,H.flags,N)
+         && rd(f,H.tier_w,N) && rd(f,H.paid,N) && rd(f,H.waiting,N)
+         && rd(f,H.emb,(size_t)N*EMB_D) && rd(f,H.emb_scale,N) && rd(f,H.seat_key,(size_t)nseat*EMB_D) && rd(f,H.seat_scale,nseat)
+         && rd(f,H.cap,H.M) && rd(f,H.supply,N) && rd(f,H.law,lawwords) && rd(f,H.arm_mask,armwords);
+  fclose(f);
+  if (!ok) { fprintf(stderr, "lattice.bin truncated\n"); return false; }
+  return true;
+}
+
+static bool read_prev_v(const char* path, std::vector<float>& v){
+  FILE* f = fopen(path, "rb"); if (!f) return false;
+  int32_t M = 0; if (fread(&M, 4, 1, f) != 1 || M <= 0 || M > (1<<26)) { fclose(f); return false; }
+  v.resize(M); const bool ok = fread(v.data(), 4, M, f) == (size_t)M; fclose(f); return ok;
+}
+
+static void write_json_farr(FILE* f, const char* key, const std::vector<float>& a){
+  fprintf(f, "\"%s\":[", key); for (size_t i=0;i<a.size();++i) fprintf(f, "%s%.7g", i?",":"", IS_MASKED(a[i]) ? -1e30 : a[i]); fprintf(f, "]");
+}
+
+static int run_tick_file(const char* lat_path, const char* prev_path, const char* out_base, bool bench, int nbins){
+  LatHost H; IsobHeader hd{};
+  if (!load_lattice_bin(lat_path, H, hd)) return 2;
+  const double peak = bench ? measure_peak_gbs(1LL << 25) : 0.0;
+  Dev D = upload(H);
+  D.L.arm = hd.arm;
+  TickOut R = run_tick(D, H, hd.iters > 0 ? hd.iters : 40, hd.dup_cos > 0 ? hd.dup_cos : 0.95f, nbins);
+  D.L.arm = 1 - hd.arm;
+  TickOut R2 = run_tick(D, H, hd.iters > 0 ? hd.iters : 40, hd.dup_cos > 0 ? hd.dup_cos : 0.95f, nbins);
+  release(D);
+
+  // Δv against the previous tick's duals (same M required)
+  std::vector<float> pv; double dvn = -1.0;
+  std::vector<std::pair<float,int>> movers;
+  if (prev_path && read_prev_v(prev_path, pv) && (int)pv.size() == H.M) {
+    double s2 = 0; for (int c=0;c<H.M;++c){ const double d = (double)R.v[c]-(double)pv[c]; s2 += d*d; movers.push_back({(float)fabs(d), c}); }
+    dvn = sqrt(s2);
+    std::sort(movers.begin(), movers.end(), [](const std::pair<float,int>& a, const std::pair<float,int>& b){ return a.first > b.first; });
+    if (movers.size() > 8) movers.resize(8);
+  }
+
+  std::string jp = std::string(out_base) + ".json", bp = std::string(out_base) + ".bin";
+  FILE* f = fopen(jp.c_str(), "wb"); if (!f) { fprintf(stderr, "cannot write %s\n", jp.c_str()); return 2; }
+  const double gbs = R.sink_ms > 0 ? R.bytes_moved / (R.sink_ms * 1e6) : 0.0;
+  fprintf(f, "{\"version\":1,\"N\":%d,\"M\":%d,\"nseat\":%d,\"nslot\":%d,\"n_stock\":%d,\"iters\":%d,\"arm\":%d,\"seed\":%llu,",
+          H.N, H.M, H.nseat, H.nslot, N_STOCK, R.iters, hd.arm, (unsigned long long)hd.seed);
+  write_json_farr(f, "u", R.u); fputc(',', f);
+  write_json_farr(f, "v", R.v); fputc(',', f);
+  write_json_farr(f, "es", R.es); fputc(',', f);
+  write_json_farr(f, "risk", R.risk); fputc(',', f);
+  fprintf(f, "\"argmax_cell\":["); for (int i=0;i<H.N;++i) fprintf(f, "%s%d", i?",":"", R.argmax_cell[i]); fprintf(f, "],");
+  fprintf(f, "\"es_mean\":%.6g,\"es_sd\":%.6g,", R.es_mean, R.es_sd);
+  fprintf(f, "\"stock_prices\":{\"UNPLACED\":%.7g,\"UNADJUDICATED\":%.7g,\"WAITING\":%.7g},",
+          std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_UNPLACED]), std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_UNADJUDICATED]),
+          std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_WAITING]));
+  fprintf(f, "\"other_arm\":{\"es_mean\":%.6g,\"unplaced_price\":%.7g,\"waiting_price\":%.7g},",
+          R2.es_mean, std::max(0.f, -R2.v[H.nseat*H.nslot+STOCK_UNPLACED]), std::max(0.f, -R2.v[H.nseat*H.nslot+STOCK_WAITING]));
+  fprintf(f, "\"by_kind\":{"); for (int k=0;k<K_N;++k) fprintf(f, "%s\"%d\":%llu", k?",":"", k, (unsigned long long)R.by_kind[k]); fprintf(f, "},");
+  fprintf(f, "\"contra\":["); { const int keep = std::min<int>((int)R.contra.size(), 4096);
+    for (int k=0;k<keep;++k) fprintf(f, "%s{\"a\":%d,\"b\":%d,\"kind\":%d,\"w\":%.5g}", k?",":"", R.contra[k].a, R.contra[k].b, R.contra[k].kind, R.contra[k].weight); }
+  fprintf(f, "],\"n_contra\":%d,", R.n_contra);
+  fprintf(f, "\"delta_v_norm\":%.7g,\"movers\":[", dvn);
+  for (size_t k=0;k<movers.size();++k) fprintf(f, "%s{\"c\":%d,\"dv\":%.6g,\"v\":%.6g}", k?",":"", movers[k].second, (double)R.v[movers[k].second]-(double)pv[movers[k].second], R.v[movers[k].second]);
+  fprintf(f, "],\"arithmetic\":{\"sink_ms\":%.3f,\"bytes\":%.0f,\"gbs\":%.2f,\"peak_gbs\":%.2f,\"fraction\":%.4f,\"floor\":0.40,\"measured_peak\":%s}}\n",
+          R.sink_ms, R.bytes_moved, gbs, peak, peak > 0 ? gbs/peak : -1.0, bench ? "true" : "false");
+  fclose(f);
+  FILE* fb = fopen(bp.c_str(), "wb"); if (fb) { int32_t M = H.M; fwrite(&M, 4, 1, fb); fwrite(R.v.data(), 4, M, fb); fclose(fb); }
+  printf("tick: N=%d M=%d iters=%d sink %.2f ms  dv=%.4g  contra=%d  waiting=%.4f  peak=%s\n",
+         H.N, H.M, R.iters, R.sink_ms, dvn, R.n_contra, std::max(0.f, -R.v[H.nseat*H.nslot+STOCK_WAITING]), bench ? "measured" : "skipped");
+  return 0;
+}
+
+// ----------------------------------------------------------------------------
+// 14 · MAIN
 // ----------------------------------------------------------------------------
 int main(int argc, char** argv)
 {
@@ -1227,8 +1438,9 @@ int main(int argc, char** argv)
   int n_dup = 200, lie = 0;
   float dup_cos = 0.95f, T = 0.25f;
   uint64_t seed = 42;
-  bool do_selftest = false, do_bench = false, do_demo = false;
+  bool do_selftest = false, do_bench = false, do_demo = false, no_bench = false;
   const char* cdc = nullptr;
+  const char* tick_path = nullptr; const char* prev_path = nullptr; const char* out_base = "field";   // ISOBAR
 
   for (int i = 1; i < argc; ++i) {
     std::string s = argv[i];
@@ -1248,10 +1460,15 @@ int main(int argc, char** argv)
     else if (s == "--dups")        n_dup = atoi(nx());
     else if (s == "--lie")         lie = atoi(nx());
     else if (s == "--cdc")         cdc = nx();
+    else if (s == "--tick")        tick_path = nx();      // ISOBAR IPC
+    else if (s == "--prev")        prev_path = nx();
+    else if (s == "--out")         out_base = nx();
+    else if (s == "--no-bench")    no_bench = true;
     else { fprintf(stderr, "unknown flag %s\n", argv[i]); return 2; }
   }
 
   if (do_selftest) return selftest(seed, lie);
+  if (tick_path)   return run_tick_file(tick_path, prev_path, out_base, !no_bench, nbins);
 
   // VRAM tier — the same binary sizes itself. 5090 is the design point.
   size_t freeb = 0, totb = 0; dev_meminfo(&freeb, &totb);
@@ -1272,7 +1489,7 @@ int main(int argc, char** argv)
 
   double peak = 0.0;
   if (do_bench || do_demo || cdc) {
-    const long long ne = 1LL << 22;
+    const long long ne = 1LL << 25;   // ISOBAR: 128 MB per array — past the 48 MB L2, so this is DRAM
     peak = measure_peak_gbs(ne);
     printf("measured peak bandwidth (stream triad, %lld elems): %.1f GB/s\n", ne, peak);
     if (do_bench && !do_demo && !cdc) return 0;
