@@ -1,0 +1,11 @@
+# tiers.yaml — importance is policy, never inferred. The owner edits this file; a model may only propose a row
+# (it lands as a candidate in the people registry until confirmed here).
+version: 1
+default_tier: 3
+tiers:
+  1: { label: "must never slip", silence_price_floor: 1.0, examples: ["mom", "top client"] }
+  2: { label: "important", silence_price_floor: 0.6 }
+  3: { label: "ordinary", silence_price_floor: 0.3 }
+  4: { label: "low / bulk", silence_price_floor: 0.05 }
+actors: []            # - { identity: "lopez@acme.example", tier: 1, relation: client }
+never_auto_contact: []  # identities the machine may never nudge or counter on its own

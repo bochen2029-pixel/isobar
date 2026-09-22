@@ -1,0 +1,26 @@
+# writ.yaml — the goal. Owner policy. Never fitted. A change is a `policy` row on the tape.
+version: 1
+tiers:
+  - [hard_breaches]
+  - [external_promises_broken]
+  - [renegotiations]
+  - [churn]
+  - [buffer, focus_fragmentation]
+weights:
+  w_hard: 8.0
+  w_soft: 2.0
+  w_ext: 4.0
+  w_backlog: 3.0
+  w_wait: 1.0
+  w_ask: 0.5
+  w_churn: 0.7
+  w_buffer: 1.0
+  w_frag: 0.5
+  w_overtime: 2.0
+pessimism:
+  beta: 1.0
+policy:
+  max_external_renegotiations_per_repair: 2
+  prefer_internal_moves: true
+  preserve_buffers: true
+  quiet_hours: ["21:00", "07:00"]

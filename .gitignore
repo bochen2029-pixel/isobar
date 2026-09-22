@@ -1,0 +1,35 @@
+# receipts and stores are the operator's own data
+runs/
+store/
+*.seg
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+vecs/
+field/
+
+# secrets and connector state
+.env
+*.key
+credentials/
+tokens/
+places.yaml
+
+# builds
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.o
+*.so
+*.dll
+build/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# scratch
+*.tmp
+*.bak
+versions/
