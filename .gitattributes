@@ -1,0 +1,9 @@
+# pin LF in the repository regardless of the checkout platform; the tape's hashes must not depend on line endings
+* text=auto eol=lf
+*.cu text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.lock text eol=lf
+*.bin binary
+*.seg binary
+*.i8 binary
