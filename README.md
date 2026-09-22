@@ -1,5 +1,7 @@
 # ISOBAR — the priced week
 
+[![ci](https://github.com/bochen2029-pixel/isobar/actions/workflows/ci.yml/badge.svg)](https://github.com/bochen2029-pixel/isobar/actions/workflows/ci.yml) · MIT · builds the CPU reference with any C++17 compiler; the GPU tier with nvcc
+
 **Your mail, your calendar and your list are not three apps. They are three sensors on one field of promises. ISOBAR prices that field every tick with a solver, rehearses every promise across thousands of futures before you make it, and keeps a mind resident on the field that speaks only when the glass falls.**
 
 > On a ship the barometer is *the glass*. Isobars are the lines of equal pressure on its chart. Sailors say *the glass is falling* when weather is coming, and nobody had to ask.
