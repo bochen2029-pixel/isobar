@@ -1,5 +1,7 @@
 # ISOBAR — SPECIFICATION
 
+> **Superseded on 2026-09-22 by `docs/SPEC_r0.2.md`, which is normative. This file is r0.1, kept byte-for-byte as lineage below this banner; nothing under it was edited.**
+
 *Rev 0.1 · 2026-09-22 · normative. Where this document and `C:/AGI/ISOBAR_THE-PRICED-WEEK_…md` (the blueprint, copied to `docs/lineage/`) disagree, this one governs the artefact and the blueprint governs the intent. Where either disagrees with a dated receipt under `runs/`, the receipt wins and the document is the defect.*
 
 Terms: **MUST**, **MUST NOT**, **SHOULD**, **MAY** carry their usual force. Every clause is tagged **[BUILT]** (exists and is covered by a gate), **[SPECIFIED]** (settled, unbuilt) or **[OPEN]** (undecided; collected in §22 and `docs/BACKLOG.md`). **Nothing in this revision is BUILT.** Numbers tagged **[M]** were measured on this box by the instrument named; **[D]** are derived; everything else is a design number to be replaced by a measurement at the milestone that produces it (`docs/ROADMAP.md`).

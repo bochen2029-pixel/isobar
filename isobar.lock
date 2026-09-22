@@ -1,10 +1,10 @@
 # isobar.lock — the single source of every number. A TODO names the laws it disables while unset;
 # SAFETY-class TODOs block their organ entirely. Thresholds are registered here BEFORE the run that uses them.
-version: 0.1
+version: 0.2   # normative text: docs/SPEC_r0.2.md; deltas: docs/contracts/CHANGES_r0.2.md
 owner:      { tz: TODO, hours: { default: ["07:00", "21:00"], per_weekday: {} }, holidays: [], calendars: [] }   # calendars: [{id, role: capacity|info}]
-lattice:    { horizon_days: 14, slot_min: 30, seats: 1, stocks: [UNPLACED, UNADJUDICATED, WAITING],
+lattice:    { horizon_days: 14, slot_min: 30, seats: 1, stocks: [UNPLACED, UNADJUDICATED, WAITING, UNRESOLVED],   # UNRESOLVED lands at M0.5
               T: 0.25, late_penalty: 1.0, iters_tick: 40, iters_future: 8,
-              stock_cap: { UNPLACED: 0.25, UNADJUDICATED: 0.05, WAITING: 0.30 },     # fractions of total work
+              stock_cap: { UNPLACED: 0.25, UNADJUDICATED: 0.05, WAITING: 0.30, UNRESOLVED: 0.20 },     # fractions of total work
               support_split: TODO_measure (borrowed 3.0), dup_cos: measured_trough_never_inherited }
 multiverse: { K: 4096, K_compose: 256, H: 14, rng: counter_based, parity_oracle: required,
               pipper_keep: paired_arrived_only, deploy_margin: 0.99 }
@@ -41,3 +41,20 @@ falsifiers: { recovery: { owners_frac: 0.60, items: 3, precision: 0.80 }, jev: {
               join: { duplicate_recall_min: 0.70 }, baseline: { equal_evidence: true } }
 organs:     { nib: "C:/nib", fusor1: "C:/fusor1", everywhere: "C:/everywhere", chunker: "C:/chunker/chunker.exe",
               e2b: "C:/e2b", peek: "C:/peek/peek.py", laya: "pip:laya", versions: TODO_pin }
+# ---- r0.2 keys (docs/SPEC_r0.2.md); values TODO until the rung that produces them ----
+island:     { default: off, raise_on_network_fault: true, effects_held: true, glass_pill: required }
+accelerator:{ backends: [cpu, cuda], leaf_functions: [place_cost, sinkhorn_row, sinkhorn_col, stencils, rollout],
+              shims: [alloc, upload_download, launch, atomic_add_u64_int], parity_oracle: O7, cuda_in_laws: forbidden }
+hand:       { seal_budget_ms: 300, state_budget_s: 3600, reply_channel: mail, renderings: [forward, share, screenshot, photo, voice, meeting, drop, paste, sms, list_line],
+              strata: [declared, passive], declared_widens_licence: false, owner_provider_curve: TODO }
+recontext:  { dv_bar: TODO, reprice: always, reforesee: when_dv_clears_bar, rebrief: when_foresight_changed }
+ask:        { max_per_day: 3, voi_floor: TODO, window: "18:30", counts_in_kappa: true }
+evict:      { after_ticks: TODO, region: cell_range }
+precedent:  { min_n: 5, weight_floor: class_prior }
+collide:    { bars: { compiled_state_line: TODO, situation_vector: TODO, projected_state_lane: TODO, row: TODO }, epsilon: TODO, self_compare_must_be_zero: true }
+realms:     { default: PERSONAL, capacity_crosses: owner_policy, evidence_crosses: never }
+surprise:   { null: kalman, instrument: next_line_nll }
+custody:    { bins: 8, monotone_required: true, remove_on_nonmonotone: true, terminus: arrival }
+rent:       { budgets: [8, 32, 128, 512, inf], controls: [shuffle_matched_chunks, reverse, era_mismatched_topic_matched, name_dated_only], retelling_bar: measured_trough }
+migration:  { required: true, curves_keyed_by_version: true, reset_on_version: forbidden }
+witness:    { slot: daily_fixed, transports: TODO(>=2), publish_on_no_change: true }

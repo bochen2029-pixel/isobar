@@ -30,7 +30,7 @@ The laws that hold it together: the commitment is canonical; the tape is the onl
 
 ## Status
 
-> **M0 · the X-ray — built and green on the gym (2026-09-22).** The tape, the typed objects, the reflex client (stub + Laya), the join, deterministic promotion, the people and money registries, the lifted field instrument (`solver/isobar_field.cu`, 8/8 oracles with lie arms on MSVC, nvcc and g++), the bridge, the Recovery Scan, the glass, five file-based connectors, a synthetic owner with planted truth, and a CLI. On the gym the X-ray recovers **7/7 plants at precision 1.00** with a perfect reflex, the paid-by-verdict invoice is never chased, the WAITING stock is priced, the tape replays byte-identically, and the competence sweep is monotone. **29/29 tests.** Receipt: `receipts/M0_GATE_2026-09-22.md`. Pending for the owner-facing half of the gate: real pilot owners (F-RECOVERY) and 200 owner-labelled emails with the Laya weights (F-JEV). No real mailbox has been connected yet. Nothing here is a claim about a real owner.
+> **M0 · the X-ray — built and green on the gym (2026-09-22).** The tape, the typed objects, the reflex client (stub + Laya), the join, deterministic promotion, the people and money registries, the lifted field instrument (`solver/isobar_field.cu`, 8/8 oracles with lie arms on MSVC, nvcc and g++), the bridge, the Recovery Scan, the glass, five file-based connectors, a synthetic owner with planted truth, and a CLI. On the gym the X-ray recovers **7/7 plants at precision 1.00** with a perfect reflex, the paid-by-verdict invoice is never chased, the WAITING stock is priced, the tape replays byte-identically, and the competence sweep is monotone. **29/29 tests.** Receipt: `receipts/M0_GATE_2026-09-22.md`. Pending for the owner-facing half of the gate: real pilot owners (F-RECOVERY) and 200 owner-labelled emails with the Laya weights (F-JEV). No real mailbox has been connected yet. Nothing here is a claim about a real owner. **The normative specification is `docs/SPEC_r0.2.md`** (r0.1 stays in `docs/SPEC.md` as lineage); the rungs and their falsifiers are `docs/ROADMAP_r0.2.md`; the contract deltas an implementing session applies under the lints are `docs/contracts/CHANGES_r0.2.md`.
 
 | M | stage | state |
 |---|---|---|
@@ -86,7 +86,7 @@ The coupling that makes it one machine rather than a pile of parts: the reflex's
 
 ```
 README.md · CLAUDE.md · LICENSE · isobar.lock · writ.yaml · tiers.yaml · requirements.txt
-docs/        SPEC.md (normative, r0.1) · VISION.md (non-normative) · ROADMAP.md · BACKLOG.md · devlog.md · contracts/ · lineage/
+docs/        SPEC_r0.2.md (normative) · SPEC.md (r0.1, lineage) · ROADMAP_r0.2.md · ROADMAP.md (r0.1) · BACKLOG.md · devlog.md · VISION.md · contracts/ (+ CHANGES_r0.2.md) · lineage/
 solver/      isobar_field.cu — C++17/CUDA, CPU reference, oracles with lie arms, the --tick IPC · build.cmd
 isobard/     the plane (Python 3.13): contracts · tape · reflex client · join · promote · registries · field bridge · scan · plane · cli
 connectors/  direct file adapters (mbox/eml, ics, todo.txt, vcf, money.csv); composio/ pending

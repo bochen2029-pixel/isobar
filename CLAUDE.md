@@ -2,7 +2,7 @@
 
 You are implementing **ISOBAR**: a personal operations plane over mail, calendar and the task list, with a solver at its centre that prices the owner's horizon every tick and integrates over sampled futures, a typed reflex that compiles prose into calibrated cells, and a resident that watches the field. The machine-wide rules in `C:\Users\user\.claude\CLAUDE.md` apply on top (forward slashes in shell commands; heredocs are blocked by a hook — author files with Write, change them with Edit; never load this shared box).
 
-Read `README.md` → `docs/SPEC.md` (normative) → `docs/ROADMAP.md` (the stage you are on and its gate) → `docs/BACKLOG.md` before writing a line. Read these before touching the organ they own:
+Read `README.md` → `docs/SPEC_r0.2.md` (normative; `docs/SPEC.md` is r0.1, lineage) → `docs/ROADMAP_r0.2.md` (the rung you are on and its gate) → `docs/contracts/CHANGES_r0.2.md` (the contract deltas to apply under the lints) → `docs/BACKLOG.md` before writing a line. Read these before touching the organ they own:
 
 - `C:/fusor1/ledger_lattice/ledger_lattice.cu` — **the field. Lift it; do not re-derive it.** The four transpositions, the one dynamics source, the six oracles with lie arms, the T17 fix, the convergence curve, the arithmetic line.
 - `C:/fusor1/FlightComputer/src/flight_computer.cu` — **the multiverse. Lift it.** One predictor, three callers; the shared `__host__ __device__` rollout leaf; the paired arrived backtest; parity.
